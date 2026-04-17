@@ -50,10 +50,16 @@
             <div class="label">更新</div>
             <div class="hint" id="update-note">点击检查是否有新版本。</div>
           </div>
-          <button id="check-updates" class="btn primary" type="button">
-            <span class="btn-label">检查更新</span>
-            <span class="btn-spinner" aria-hidden="true"></span>
-          </button>
+          <div class="btn-group">
+            <button id="check-updates" class="btn primary" type="button">
+              <span class="btn-label">检查更新</span>
+              <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+            <button id="install-update" class="btn accent" type="button" hidden>
+              <span class="btn-label">下载并安装</span>
+              <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
         </div>
         <div class="row" id="update-channel-row">
           <span class="label">通道</span>

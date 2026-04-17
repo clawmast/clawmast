@@ -17,6 +17,7 @@
   const statusBadge = $("status-badge");
   const statusText = $("status-text");
   const checkBtn = $("check-updates");
+  const installBtn = $("install-update");
   const updateCard = $("update-card");
   const updateResult = $("update-result");
   const updateResultText = $("update-result-text");
@@ -124,6 +125,7 @@
       applyUpdateTone("danger");
       updateResultText.textContent = `请求失败:${err.message || err}`;
       updateResultMeta.hidden = true;
+      installBtn.hidden = true;
     } finally {
       checkBtn.dataset.loading = "0";
       checkBtn.disabled = false;
@@ -135,6 +137,7 @@
     if (u.channel) updateChannelEl.textContent = u.channel;
 
     let tone, headline, metaBits = [];
+    let canInstall = false;
     if (u.source === "signed-manifest") {
       tone = u.update_available ? "warn" : "ok";
       headline = u.update_available
@@ -142,6 +145,12 @@
         : `已是最新:${u.current}`;
       if (u.published_at) metaBits.push(`发布于 ${u.published_at}`);
       if (u.notes) metaBits.push(u.notes);
+      // Only surface install when the signature verified AND the
+      // channel actually advertises a different version. Anything
+      // less (error, not-configured, already up-to-date) must not
+      // expose the button — we would either have nothing to install
+      // or nothing that passes manifest verification.
+      canInstall = u.update_available === true;
     } else if (u.source === "error") {
       const copy = UPDATE_ERROR_COPY[u.error_code] || UPDATE_ERROR_COPY.unreachable;
       tone = copy.tone;
@@ -164,6 +173,73 @@
       updateResultMeta.textContent = "";
     }
     if (u.source === "not-configured" && u.note) updateNote.textContent = u.note;
+    installBtn.hidden = !canInstall;
+    installBtn.disabled = !canInstall;
+    installBtn.dataset.version = u.latest || "";
+  }
+
+  // Copy tables for /api/updates/install errors. Keyed on the
+  // error_code field so the UI can render targeted remediation
+  // ("do not install this artefact" vs "try again later").
+  const INSTALL_ERROR_COPY = {
+    "bad-sha256":         "artefact 哈希与已签名 manifest 不一致,拒绝安装",
+    "size-mismatch":      "artefact 大小与 manifest 声明不一致",
+    "bad-tarball":        "artefact 打包异常或含不安全路径",
+    "no-artifact":        "该发布未提供匹配本机的构建",
+    "already-installed":  "已在目标版本,无需安装",
+    "not-configured":     "未配置更新通道(CLAWMAST_UPDATE_URL)",
+    "install-root-unknown": "安装根目录未知;standalone 模式下不能自更新",
+    "restart-unavailable":  "worker 未挂接重启钩子,拒绝原地旋转符号链接",
+    "bad-signature":      "签名验证失败 — 切勿安装",
+    "channel-mismatch":   "manifest 通道与本机配置不一致",
+    "manifest-missing":   "通道未发布 manifest",
+    "unreachable":        "无法连接更新通道",
+  };
+
+  async function installUpdate() {
+    const targetVersion = installBtn.dataset.version || "";
+    const ok = window.confirm(
+      `确认下载并安装 ${targetVersion || "最新版本"}?\n\n` +
+      `将校验签名与哈希,写入 versions/ 目录并旋转 current/previous 符号链接,` +
+      `然后 worker 会平稳退出;监工(clawmastd)会在新链接下重新拉起。`,
+    );
+    if (!ok) return;
+    installBtn.dataset.loading = "1";
+    installBtn.disabled = true;
+    checkBtn.disabled = true;
+    try {
+      const res = await fetch("/api/updates/install", { method: "POST" });
+      const payload = await res.json();
+      if (!res.ok) {
+        const copy = INSTALL_ERROR_COPY[payload.error_code]
+          || payload.note || `HTTP ${res.status}`;
+        applyUpdateTone("danger");
+        updateResult.hidden = false;
+        updateResultText.textContent = `安装失败:${copy}`;
+        updateResultMeta.hidden = !payload.note;
+        updateResultMeta.textContent = payload.note || "";
+        return;
+      }
+      applyUpdateTone("ok");
+      updateResult.hidden = false;
+      updateResultText.textContent =
+        `已安装 ${payload.version}(原 ${payload.previous_version || "?"});` +
+        `worker 即将重启并在新版本下恢复,页面会短暂中断。`;
+      updateResultMeta.hidden = false;
+      updateResultMeta.textContent =
+        `current → ${payload.current_after} · previous → ${payload.previous_after || "—"} · ` +
+        `下载 ${payload.bytes_downloaded || 0} bytes`;
+      setStatus("error", "即将重启…");
+      installBtn.hidden = true;
+    } catch (err) {
+      applyUpdateTone("danger");
+      updateResult.hidden = false;
+      updateResultText.textContent = `请求失败:${err.message || err}`;
+      updateResultMeta.hidden = true;
+    } finally {
+      installBtn.dataset.loading = "0";
+      checkBtn.disabled = false;
+    }
   }
 
   // --- history timeline -------------------------------------------------
@@ -350,6 +426,7 @@
 
   historyRefreshBtn.addEventListener("click", loadHistory);
   checkBtn.addEventListener("click", checkUpdates);
+  installBtn.addEventListener("click", installUpdate);
   markBadBtn.addEventListener("click", markCurrentBad);
 
   loadVersion().then(loadBlacklist);

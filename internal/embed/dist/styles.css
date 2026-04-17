@@ -141,6 +141,20 @@ body {
   border-color: rgba(220, 38, 38, 0.35);
 }
 .btn.danger:hover { background: rgba(220, 38, 38, 0.2); border-color: rgba(220, 38, 38, 0.6); color: #FFE4E6; }
+/* accent: the install-update action. Distinct from primary (check) so
+ * the two sit side-by-side without reading as interchangeable. Uses
+ * the success hue to signal "ready to move forward" after a check
+ * flagged an available update. */
+.btn.accent {
+  background: rgba(22, 163, 74, 0.14);
+  color: #BBF7D0;
+  border-color: rgba(22, 163, 74, 0.38);
+}
+.btn.accent:hover { background: rgba(22, 163, 74, 0.22); border-color: rgba(22, 163, 74, 0.62); color: #DCFCE7; }
+/* Stack the two update buttons horizontally but let them wrap on
+ * narrow viewports. */
+.btn-group { display: inline-flex; flex-wrap: wrap; gap: 8px; flex: 0 0 auto; }
+.row.spaced > .btn-group { flex: 0 0 auto; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
