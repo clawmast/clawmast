@@ -79,6 +79,7 @@ func NewServer(cfg Config) *Server {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/version", s.handleVersion)
+	s.mux.HandleFunc("GET /api/history", s.handleHistory)
 	s.mux.HandleFunc("POST /api/updates/check", s.handleUpdateCheck)
 
 	uiFS, err := fs.Sub(embed.Assets, "dist")

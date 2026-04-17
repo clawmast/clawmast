@@ -102,6 +102,9 @@ curl -sf "http://127.0.0.1:${SMOKE_PORT}/api/version"  > "${PREFIX}/logs/version
 curl -sf -X POST "http://127.0.0.1:${SMOKE_PORT}/api/updates/check" \
   > "${PREFIX}/logs/updates.json" \
   || { echo "FAIL: /api/updates/check did not return 200"; exit 1; }
+curl -sf "http://127.0.0.1:${SMOKE_PORT}/api/history?limit=10" \
+  > "${PREFIX}/logs/history.json" \
+  || { echo "FAIL: /api/history did not return 200"; exit 1; }
 
 grep -q '<title>ClawMast</title>'   "${PREFIX}/logs/index.html"   || { echo "FAIL: index.html missing title"; exit 1; }
 grep -q '"ok":true'                 "${PREFIX}/logs/health.json"  || { echo "FAIL: health.json missing ok=true"; exit 1; }
@@ -110,6 +113,9 @@ grep -q '"ok":true'                 "${PREFIX}/logs/health.json"  || { echo "FAI
 grep -q '"version":'                "${PREFIX}/logs/version.json" || { echo "FAIL: version.json missing version field"; exit 1; }
 grep -q '"go_version":"go1'         "${PREFIX}/logs/version.json" || { echo "FAIL: version.json missing go_version"; exit 1; }
 grep -q '"update_available":false'  "${PREFIX}/logs/updates.json" || { echo "FAIL: updates.json missing update_available field"; exit 1; }
+# history.json served over HTTP mirrors state/history.json on disk.
+grep -q '"event":"spawn"'           "${PREFIX}/logs/history.json" || { echo "FAIL: /api/history missing spawn event"; exit 1; }
+grep -q '"path":'                   "${PREFIX}/logs/history.json" || { echo "FAIL: /api/history missing path field"; exit 1; }
 
 kill -TERM "${SUP}"
 wait "${SUP}"

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -55,10 +56,15 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 	// in a goroutine and is shut down from the defer chain when ctx is
 	// cancelled; any startup failure is surfaced via startErr.
 	httpAddr := envOr("CLAWMAST_HTTP_ADDR", agent.DefaultAddr)
+	installRoot := resolveInstallRoot(logger)
 	var srv *agent.Server
 	httpErrCh := make(chan error, 1)
 	if httpAddr != "off" {
-		srv = agent.NewServer(agent.Config{Addr: httpAddr, Logger: logger})
+		srv = agent.NewServer(agent.Config{
+			Addr:        httpAddr,
+			Logger:      logger,
+			InstallRoot: installRoot,
+		})
 		go func() { httpErrCh <- srv.Start(ctx) }()
 		// Give the listener a beat to bind so logs stay ordered; the
 		// bound address is only known after Start.
@@ -112,6 +118,47 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// resolveInstallRoot best-effort-locates the clawmastd install tree so
+// supervisor-scoped endpoints (/api/history in Iteration 1, channel /
+// blacklist in later iterations) can read shared state.
+//
+// Resolution order:
+//
+//  1. CLAWMAST_INSTALL_ROOT env var — explicit, used by tests and the
+//     supervisor when it wants to pin a non-default root.
+//  2. Walk up from os.Executable(): the production binary lives at
+//     <root>/versions/vX.Y.Z/clawmast, so <root> = exe/../.. when the
+//     sibling state/ and versions/ directories exist.
+//
+// Returns "" when neither path produces a plausible root. The agent
+// degrades gracefully (503 on supervisor-scoped endpoints) in that
+// case; the UI treats an empty InstallRoot as "standalone mode".
+func resolveInstallRoot(logger *slog.Logger) string {
+	if v := os.Getenv("CLAWMAST_INSTALL_ROOT"); v != "" {
+		return v
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err == nil {
+		exe = resolved
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", ".."))
+	// Require both state/ and versions/ so we only accept a directory
+	// that actually looks like an install root.
+	if st, err := os.Stat(filepath.Join(root, "state")); err != nil || !st.IsDir() {
+		return ""
+	}
+	if st, err := os.Stat(filepath.Join(root, "versions")); err != nil || !st.IsDir() {
+		return ""
+	}
+	logger.Info("resolved install root from executable path",
+		"component", "worker", "install_root", root)
+	return root
 }
 
 // heartbeat ticks WATCHDOG=1 every interval until ctx is cancelled.
