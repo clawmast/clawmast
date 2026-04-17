@@ -41,7 +41,12 @@ body {
 .shell {
   max-width: 520px;
   margin: 0 auto;
-  padding: 40px 20px 80px;
+  /* Respect iPhone home-bar / notch safe areas. The max() keeps the
+   * in-design 80 px floor when the device has no inset. */
+  padding:
+    max(32px, env(safe-area-inset-top))
+    20px
+    max(80px, env(safe-area-inset-bottom) + 24px);
   display: flex; flex-direction: column; gap: 16px;
 }
 
@@ -60,10 +65,20 @@ body {
 }
 
 .row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-.row.spaced { align-items: center; }
+/* .row.spaced is "label+hint on the left, action on the right". On
+ * narrow viewports (~<=380 px) the descriptive hint can crowd the
+ * action button; let them wrap and keep the button full-width as a
+ * fallback row. The text column is allowed to grow; the button never
+ * shrinks below its label. */
+.row.spaced { align-items: center; flex-wrap: wrap; row-gap: 10px; }
+.row.spaced > :first-child { flex: 1 1 220px; min-width: 0; }
+.row.spaced > .btn { flex: 0 0 auto; }
 .label { color: var(--text-3); font-size: 13px; }
 .hint { color: var(--text-3); font-size: 13px; margin-top: 2px; max-width: 34ch; }
-.mono { font-family: var(--font-mono); color: var(--text-2); font-size: 14px; }
+/* Mono cells tend to hold paths, git SHAs, and build times that exceed
+ * a mobile viewport width. Break on any character rather than pushing
+ * the whole card wider. */
+.mono { font-family: var(--font-mono); color: var(--text-2); font-size: 14px; overflow-wrap: anywhere; }
 .mono.small { font-size: 12px; color: var(--text-3); }
 
 .badge {
@@ -99,7 +114,9 @@ body {
   color: var(--text);
   background: var(--surface-2);
   transition: background 180ms ease-out, transform 120ms ease-out, border-color 180ms ease-out;
-  min-height: 40px;
+  /* 44 px matches the Apple HIG / Material Design tap-target minimum;
+   * ghost buttons below are intentionally smaller for secondary use. */
+  min-height: 44px;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
 }
 .btn:hover { background: #1A2236; }
@@ -134,7 +151,11 @@ body {
  * timestamps on a second line. The rail is a thin gradient so that
  * long histories don't feel visually noisy.
  */
-.history .hint { max-width: none; }
+/* The history hint carries a full file path; let it flow to the card's
+ * width rather than clipping at the default 34ch. The same applies to
+ * the blacklist card which describes the rollback semantics inline. */
+.history .hint,
+.blacklist .hint { max-width: none; }
 .history .hint.muted { color: var(--text-3); font-size: 12px; text-align: center; padding: 12px 0 4px; }
 
 .timeline {
@@ -172,7 +193,8 @@ body {
 .tl-stop     .tl-dot { background: var(--text-3);  box-shadow: 0 0 0 1px var(--line); }
 
 .tl-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.tl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.tl-head > .mono { overflow-wrap: anywhere; min-width: 0; }
 .tl-label { font-size: 13px; font-weight: 500; color: var(--text); }
 .tl-spawn    .tl-label { color: #BFDBFE; }
 .tl-crash    .tl-label { color: #FECACA; }
@@ -217,10 +239,24 @@ body {
   display: flex; justify-content: center; align-items: center; gap: 8px;
   color: var(--text-3);
   font-size: 12px;
+  /* Footer holds `commit, build_time, go_version` — definitely wider
+   * than a phone viewport. Allow the whole footer to wrap and let the
+   * build string itself break on any character. */
+  flex-wrap: wrap; text-align: center;
 }
 .foot .sep { color: var(--line); }
+.foot .mono { max-width: 100%; overflow-wrap: anywhere; }
 .link { color: var(--text-2); text-decoration: none; border-bottom: 1px dotted var(--line); }
 .link:hover { color: var(--primary); border-color: var(--primary); }
+
+/* Very narrow viewports (iPhone SE 1st gen, folded phones). Trim the
+ * horizontal gutter and tighten card padding so content reads without
+ * horizontal pressure. */
+@media (max-width: 360px) {
+  .shell { padding-left: 14px; padding-right: 14px; }
+  .card  { padding: 14px; }
+  .hero h1 { font-size: 26px; }
+}
 
 @media (min-width: 640px) {
   .shell { padding-top: 64px; }
