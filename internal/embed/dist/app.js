@@ -20,8 +20,16 @@
   const updateResult = $("update-result");
   const updateResultText = $("update-result-text");
   const updateNote = $("update-note");
+  const historyCard = $("history-card");
+  const historyList = $("history-list");
+  const historyEmpty = $("history-empty");
+  const historyHint = $("history-hint");
+  const historyRefreshBtn = $("history-refresh");
 
-  const fmt = new Intl.RelativeTimeFormat("zh-Hans", { numeric: "always" });
+  const rtf = new Intl.RelativeTimeFormat("zh-Hans", { numeric: "auto" });
+  const tfmt = new Intl.DateTimeFormat("zh-Hans", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  });
 
   async function jfetch(url, init) {
     const res = await fetch(url, init);
@@ -90,9 +98,104 @@
     }
   }
 
+  // --- history timeline -------------------------------------------------
+
+  const EVENT_LABELS = {
+    spawn: "启动", crash: "崩溃", rollback: "回滚", stop: "停止",
+  };
+
+  function fmtRelative(d) {
+    const delta = (d.getTime() - Date.now()) / 1000;
+    const abs = Math.abs(delta);
+    if (abs < 60)        return rtf.format(Math.round(delta), "second");
+    if (abs < 3600)      return rtf.format(Math.round(delta / 60), "minute");
+    if (abs < 86400)     return rtf.format(Math.round(delta / 3600), "hour");
+    return rtf.format(Math.round(delta / 86400), "day");
+  }
+
+  function renderEntry(e) {
+    const li = document.createElement("li");
+    li.className = `tl tl-${e.event}`;
+    const dot = document.createElement("span");
+    dot.className = "tl-dot";
+    dot.setAttribute("aria-hidden", "true");
+    const body = document.createElement("div");
+    body.className = "tl-body";
+
+    const head = document.createElement("div");
+    head.className = "tl-head";
+    const label = document.createElement("span");
+    label.className = "tl-label";
+    label.textContent = EVENT_LABELS[e.event] || e.event;
+    const ver = document.createElement("span");
+    ver.className = "mono small tl-version";
+    ver.textContent = e.version || "—";
+    head.appendChild(label);
+    head.appendChild(ver);
+    if (e.exit_code !== undefined && e.exit_code !== null) {
+      const code = document.createElement("span");
+      code.className = "mono small tl-code";
+      code.textContent = `exit=${e.exit_code}`;
+      head.appendChild(code);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "tl-meta";
+    const ts = new Date(e.ts);
+    const abs = document.createElement("time");
+    abs.className = "mono small";
+    abs.dateTime = e.ts;
+    abs.textContent = tfmt.format(ts);
+    const rel = document.createElement("span");
+    rel.className = "muted small";
+    rel.textContent = fmtRelative(ts);
+    meta.appendChild(abs);
+    meta.appendChild(document.createTextNode(" · "));
+    meta.appendChild(rel);
+    if (e.reason) {
+      meta.appendChild(document.createTextNode(" · "));
+      const reason = document.createElement("span");
+      reason.className = "muted small";
+      reason.textContent = e.reason;
+      meta.appendChild(reason);
+    }
+
+    body.appendChild(head);
+    body.appendChild(meta);
+    li.appendChild(dot);
+    li.appendChild(body);
+    return li;
+  }
+
+  async function loadHistory() {
+    try {
+      const res = await fetch("/api/history?limit=20");
+      if (res.status === 503) {
+        historyCard.hidden = true;
+        return;
+      }
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const payload = await res.json();
+      historyCard.hidden = false;
+      historyList.replaceChildren();
+      const entries = (payload.entries || []).slice().reverse();
+      for (const e of entries) historyList.appendChild(renderEntry(e));
+      historyEmpty.hidden = entries.length > 0;
+      historyHint.innerHTML = `共 <span class="mono small">${payload.count}</span> 条记录 · <span class="mono small">${payload.path}</span>`;
+    } catch (err) {
+      historyCard.hidden = false;
+      historyList.replaceChildren();
+      historyEmpty.hidden = false;
+      historyEmpty.textContent = `加载失败:${err.message || err}`;
+    }
+  }
+
+  historyRefreshBtn.addEventListener("click", loadHistory);
   checkBtn.addEventListener("click", checkUpdates);
 
   loadVersion();
   poll();
+  loadHistory();
   setInterval(poll, 5000);
+  setInterval(loadHistory, 15000);
 })();

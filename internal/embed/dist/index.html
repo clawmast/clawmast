@@ -61,6 +61,25 @@
         </div>
       </section>
 
+      <section class="card history" id="history-card" hidden>
+        <div class="row spaced">
+          <div>
+            <div class="label">升级与运行历史</div>
+            <div class="hint" id="history-hint">来自 <span class="mono small">state/history.json</span></div>
+          </div>
+          <button id="history-refresh" class="btn ghost" type="button" aria-label="刷新历史">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+              <path d="M21 3v5h-5"/>
+              <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+              <path d="M3 21v-5h5"/>
+            </svg>
+          </button>
+        </div>
+        <ol class="timeline" id="history-list" aria-live="polite"></ol>
+        <div class="hint muted" id="history-empty" hidden>暂无记录。</div>
+      </section>
+
       <footer class="foot">
         <span class="mono small" id="footer-full">—</span>
         <span class="sep">·</span>
