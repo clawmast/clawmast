@@ -20,7 +20,10 @@ import (
 	"runtime"
 	"time"
 
+	"aead.dev/minisign"
+
 	"github.com/clawmast/clawmast/internal/embed"
+	"github.com/clawmast/clawmast/internal/updater"
 )
 
 // Config controls the worker HTTP server. All fields are optional; the
@@ -46,6 +49,21 @@ type Config struct {
 	// so the supervisor performs the symlink swap per protocol §4.
 	// Nil disables the write path (GET still works).
 	RequestRollback func()
+	// UpdateBaseURL is the channel directory that serves
+	// manifest.json and manifest.json.minisig. Empty disables the
+	// update-check round-trip; /api/updates/check then returns
+	// source="not-configured".
+	UpdateBaseURL string
+	// UpdateChannel is the expected channel name (e.g. "stable" or
+	// "beta"). Empty defaults to updater.DefaultChannel. Manifests
+	// whose channel field differs are rejected with
+	// updater.ErrChannelMismatch.
+	UpdateChannel string
+	// UpdatePubKey, when non-zero, overrides the embedded dev public
+	// key used to verify manifest signatures. Tests set this to a
+	// freshly generated key; production builds leave it zero and
+	// fall back to updater.MustDevPublicKey.
+	UpdatePubKey minisign.PublicKey
 }
 
 // DefaultAddr binds loopback-only by default. Exposing the worker on a
@@ -62,6 +80,9 @@ type Server struct {
 	ln      net.Listener
 	log     *slog.Logger
 	started time.Time
+	// updater is nil when Config.UpdateBaseURL is empty; the handler
+	// uses that to short-circuit to source="not-configured".
+	updater *updater.Client
 }
 
 // NewServer constructs a Server but does not bind the listener; call
@@ -74,7 +95,17 @@ func NewServer(cfg Config) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.UpdateChannel == "" {
+		cfg.UpdateChannel = updater.DefaultChannel
+	}
 	s := &Server{cfg: cfg, log: cfg.Logger, mux: http.NewServeMux()}
+	if cfg.UpdateBaseURL != "" {
+		key := cfg.UpdatePubKey
+		if key.ID() == 0 {
+			key = updater.MustDevPublicKey()
+		}
+		s.updater = updater.New(cfg.UpdateBaseURL, cfg.UpdateChannel, key)
+	}
 	s.routes()
 	return s
 }
@@ -144,6 +175,12 @@ func (s *Server) Addr() string {
 	}
 	return s.ln.Addr().String()
 }
+
+// Handler returns the underlying mux, intended for use in tests that
+// want to exercise the HTTP surface through httptest.NewServer
+// without booting Start's goroutine (and the lifecycle bookkeeping
+// that goes with it).
+func (s *Server) Handler() http.Handler { return s.mux }
 
 // Shutdown triggers a graceful HTTP shutdown with a short timeout so
 // the worker can exit promptly on SIGTERM. It is safe to call

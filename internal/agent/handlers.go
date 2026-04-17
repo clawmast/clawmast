@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/clawmast/clawmast/internal/history"
+	"github.com/clawmast/clawmast/internal/updater"
 	"github.com/clawmast/clawmast/internal/version"
 )
 
@@ -40,17 +43,28 @@ type HealthResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// UpdateCheckResponse is the Iteration 0 stub for POST
-// /api/updates/check. Real channel and signature logic ships in
-// Iteration 2 per architecture/refactor.md §6; for now the endpoint
-// reports the running version as "latest" so the UI round-trip works
-// end-to-end without pretending an update is ready.
+// UpdateCheckResponse is the payload of POST /api/updates/check.
+// Iteration 2 (architecture/refactor.md §6) replaced the stub with a
+// real signed-manifest round-trip; the "source" field distinguishes
+// the outcomes the UI needs to render differently:
+//
+//   - "signed-manifest": Current / Latest carry real data and the
+//     signature verified against the embedded dev pubkey.
+//   - "not-configured": the worker has no CLAWMAST_UPDATE_URL set, so
+//     we report the running version as both current and latest without
+//     pretending we reached a channel.
+//   - "error": the channel round-trip failed; "note" carries the
+//     reason and "error_code" categorises it (bad-signature,
+//     channel-mismatch, manifest-missing, unreachable).
 type UpdateCheckResponse struct {
 	Current         string `json:"current"`
 	Latest          string `json:"latest"`
 	UpdateAvailable bool   `json:"update_available"`
 	Channel         string `json:"channel"`
 	Source          string `json:"source"`
+	PublishedAt     string `json:"published_at,omitempty"`
+	Notes           string `json:"notes,omitempty"`
+	ErrorCode       string `json:"error_code,omitempty"`
 	Note            string `json:"note,omitempty"`
 }
 
@@ -75,19 +89,73 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleUpdateCheck implements the Iteration 0 stub for the "check for
-// updates" button. It returns 200 with update_available=false and a
-// human-readable note so the UI can display the behaviour truthfully
-// without a placeholder "coming soon" pop-up.
-func (s *Server) handleUpdateCheck(w http.ResponseWriter, _ *http.Request) {
+// handleUpdateCheck performs the Iteration 2 signed-manifest round
+// trip: fetch <UpdateBaseURL>/manifest.json + .minisig, verify the
+// signature, and compare the advertised version to the running one.
+// Shape is UpdateCheckResponse; see that doc comment for the three
+// possible "source" values (signed-manifest / not-configured / error).
+//
+// The request carries no body today; POST was chosen during Iteration 0
+// to leave room for channel / force flags without breaking a cached GET.
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	current := currentVersionLabel()
+	if s.updater == nil {
+		writeJSON(w, http.StatusOK, UpdateCheckResponse{
+			Current:         current,
+			Latest:          current,
+			UpdateAvailable: false,
+			Channel:         s.cfg.UpdateChannel,
+			Source:          "not-configured",
+			Note:            "CLAWMAST_UPDATE_URL is unset; set it to the channel base URL (for example https://update.clawmast.com/stable) to enable update checks.",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	manifest, err := s.updater.Check(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusOK, UpdateCheckResponse{
+			Current:         current,
+			Latest:          current,
+			UpdateAvailable: false,
+			Channel:         s.cfg.UpdateChannel,
+			Source:          "error",
+			ErrorCode:       classifyUpdaterError(err),
+			Note:            err.Error(),
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, UpdateCheckResponse{
-		Current:         version.Version,
-		Latest:          version.Version,
-		UpdateAvailable: false,
-		Channel:         "stable",
-		Source:          "stub",
-		Note:            "update channel lands in Iteration 2 (architecture/refactor.md §6); this endpoint is a placeholder so the UI round-trip works end-to-end.",
+		Current:         current,
+		Latest:          manifest.Version,
+		UpdateAvailable: manifest.Version != current,
+		Channel:         manifest.Channel,
+		Source:          "signed-manifest",
+		PublishedAt:     manifest.PublishedAt.UTC().Format(time.RFC3339),
+		Notes:           manifest.Notes,
 	})
+}
+
+// classifyUpdaterError maps the updater package's sentinel errors to
+// stable machine-readable codes so the UI can render targeted copy
+// ("signature failed — do not install this binary" vs "channel is
+// unreachable — try again later") without string-matching error text.
+func classifyUpdaterError(err error) string {
+	switch {
+	case errors.Is(err, updater.ErrBadSignature):
+		return "bad-signature"
+	case errors.Is(err, updater.ErrChannelMismatch):
+		return "channel-mismatch"
+	case errors.Is(err, updater.ErrManifestMissing):
+		return "manifest-missing"
+	case errors.Is(err, updater.ErrManifestTooBig):
+		return "manifest-too-big"
+	case errors.Is(err, updater.ErrBadURL):
+		return "bad-url"
+	default:
+		return "unreachable"
+	}
 }
 
 // HistoryEntryDTO is the wire-shape for /api/history. It mirrors the

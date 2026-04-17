@@ -74,6 +74,8 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 				default:
 				}
 			},
+			UpdateBaseURL: envOr("CLAWMAST_UPDATE_URL", ""),
+			UpdateChannel: envOr("CLAWMAST_UPDATE_CHANNEL", "stable"),
 		})
 		go func() { httpErrCh <- srv.Start(ctx) }()
 		// Give the listener a beat to bind so logs stay ordered; the
