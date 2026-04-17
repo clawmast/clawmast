@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"aead.dev/minisign"
+
 	"github.com/clawmast/clawmast/internal/agent"
 	"github.com/clawmast/clawmast/internal/sdnotify"
 	"github.com/clawmast/clawmast/internal/version"
@@ -64,6 +66,10 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 	// so the handler's goroutine never blocks on shutdown.
 	rollbackCh := make(chan struct{}, 1)
 	if httpAddr != "off" {
+		pubKey, err := loadUpdatePubKey(os.Getenv("CLAWMAST_UPDATE_PUBKEY_FILE"))
+		if err != nil {
+			return fmt.Errorf("load update pubkey: %w", err)
+		}
 		srv = agent.NewServer(agent.Config{
 			Addr:        httpAddr,
 			Logger:      logger,
@@ -76,6 +82,7 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 			},
 			UpdateBaseURL: envOr("CLAWMAST_UPDATE_URL", ""),
 			UpdateChannel: envOr("CLAWMAST_UPDATE_CHANNEL", "stable"),
+			UpdatePubKey:  pubKey,
 		})
 		go func() { httpErrCh <- srv.Start(ctx) }()
 		// Give the listener a beat to bind so logs stay ordered; the
@@ -223,4 +230,27 @@ func heartbeat(ctx context.Context, client *sdnotify.Client, interval time.Durat
 // for graceful shutdown (supervisor-protocol.md §7).
 func workerSignalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+// loadUpdatePubKey returns the minisign public key the agent will use
+// to verify update manifests. An empty path returns the zero value,
+// which agent.NewServer treats as "fall back to the embedded dev key".
+// A non-empty path must point at a minisign text-format public key
+// file (the same shape clawmast-release keygen produces).
+//
+// This hook exists so the update-channel smoke test can point the
+// worker at an ephemeral keypair without rebuilding the binary.
+func loadUpdatePubKey(path string) (minisign.PublicKey, error) {
+	if path == "" {
+		return minisign.PublicKey{}, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return minisign.PublicKey{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var pk minisign.PublicKey
+	if err := pk.UnmarshalText(raw); err != nil {
+		return minisign.PublicKey{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return pk, nil
 }

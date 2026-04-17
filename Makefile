@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -80,6 +80,13 @@ upgrade-smoke:
 # supervisor rolls back to the previous version.
 blacklist-smoke:
 	bash scripts/blacklist-smoke.sh
+
+# T2-01 — update channel & signature verification smoke. Generates a
+# throwaway minisign keypair, signs a test manifest, serves it over a
+# local HTTP server, and asserts POST /api/updates/check verifies the
+# signature (happy path + tampering).
+update-smoke:
+	bash scripts/update-smoke.sh
 
 clean:
 	rm -rf bin/ dist/
