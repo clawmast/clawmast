@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -63,6 +63,12 @@ install: build
 # and verifies the on-disk layout + a clawmastd boot/shutdown round-trip.
 install-smoke:
 	bash scripts/install-smoke.sh
+
+# T0-08 — forced-failure rollback test. Boots clawmastd with a deliberately
+# crashing worker as "current" and verifies the supervisor swaps current ↔
+# previous after the crash-loop budget is exhausted.
+rollback-smoke:
+	bash scripts/rollback-smoke.sh
 
 clean:
 	rm -rf bin/ dist/
