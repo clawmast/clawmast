@@ -53,6 +53,14 @@ func spawn(cfg Config, path, version string) (*session, error) {
 	env = append(env,
 		"NOTIFY_SOCKET="+cfg.NotifySocketPath,
 		"WATCHDOG_USEC="+strconv.FormatInt(cfg.WatchdogInterval.Microseconds(), 10),
+		// CLAWMAST_VERSION_LABEL carries the supervisor's notion of the
+		// running version — the name of the directory the "current"
+		// symlink resolves to. It may differ from the binary's
+		// compile-time version.Version (e.g. local dev builds reporting
+		// "abc123-dirty") and is the label the worker must use when
+		// writing to state/blacklist.json so the supervisor's pre-spawn
+		// check matches.
+		"CLAWMAST_VERSION_LABEL="+version,
 	)
 	// WATCHDOG_PID is optional in the protocol (§5.1). We omit it
 	// in v1.0: the only way to inject it at exec time is to know

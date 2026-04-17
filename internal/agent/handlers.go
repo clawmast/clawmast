@@ -14,7 +14,16 @@ import (
 // deliberately flat and snake_case so the JS client can bind to them
 // without a schema layer.
 type VersionResponse struct {
-	Version   string `json:"version"`
+	// Version is the ldflags-injected semver-ish string from
+	// internal/version. For local dev builds this is a git-describe
+	// fallback like "abc123-dirty".
+	Version string `json:"version"`
+	// Label is the supervisor's notion of the running version —
+	// the directory name behind the "current" symlink, propagated
+	// via CLAWMAST_VERSION_LABEL. The UI prefers this when showing
+	// "current version" so the label matches what the installer and
+	// blacklist use. Equals Version under standalone mode.
+	Label     string `json:"label"`
 	Commit    string `json:"commit"`
 	BuildTime string `json:"build_time"`
 	GoVersion string `json:"go_version"`
@@ -58,6 +67,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, VersionResponse{
 		Version:   version.Version,
+		Label:     currentVersionLabel(),
 		Commit:    version.Commit,
 		BuildTime: version.BuildTime,
 		GoVersion: goVersion,

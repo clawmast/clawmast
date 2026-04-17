@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/clawmast/clawmast/internal/blacklist"
 )
 
 // newSupervisorFixture builds a Config wired for fast tests: short
@@ -317,5 +319,98 @@ func TestRunRollsBackAfterCrashLoop(t *testing.T) {
 	curTarget, _ := os.Readlink(filepath.Join(root, "current"))
 	if !strings.HasSuffix(curTarget, "good") {
 		t.Errorf("current symlink target = %q, want .../good", curTarget)
+	}
+}
+
+// TestRunRollsBackOnBlacklistedCurrentBeforeSpawn exercises the
+// pre-spawn blacklist check in supervisor.checkBlacklist: when the
+// "current" symlink points at a version listed in blacklist.json the
+// supervisor rotates to "previous" without ever exec'ing the blocked
+// binary. This is the safety net for the (rare) case where a prior
+// install left current pointing at a known-bad version.
+func TestRunRollsBackOnBlacklistedCurrentBeforeSpawn(t *testing.T) {
+	root, sockDir, histDir := setupRollbackLayout(t)
+
+	// Pre-seed the blacklist before the supervisor starts. The
+	// "bad" directory is the current target; the supervisor must
+	// refuse to spawn it and instead swap to "good" on first tick.
+	blPath := filepath.Join(root, "state", "blacklist.json")
+	if _, err := blacklist.Add(blPath, blacklist.Entry{
+		Version: "bad", Reason: "pre-seeded-for-test",
+	}); err != nil {
+		t.Fatalf("seed blacklist: %v", err)
+	}
+
+	cfg := Config{
+		InstallRoot:      root,
+		WorkerBinaryName: "clawmast",
+		// by_path mode lets the fake worker pick ready/heartbeat
+		// behaviour based on the binary path basename — "good"
+		// signals READY and watchdogs, "bad" would immediately
+		// exit with code 65. We assert below that "bad" was never
+		// launched so its exact behaviour is irrelevant.
+		ExtraEnv:         []string{"CMFAKE_MODE=by_path"},
+		StartTimeout:     500 * time.Millisecond,
+		WatchdogInterval: 500 * time.Millisecond,
+		StopGrace:        200 * time.Millisecond,
+		Backoff: BackoffPolicy{
+			Base: 10 * time.Millisecond, Max: 20 * time.Millisecond,
+			SteadyReset: time.Minute, CrashWindow: time.Minute, CrashCap: 3,
+		},
+		NotifySocketPath: filepath.Join(sockDir, "n.sock"),
+		HistoryPath:      filepath.Join(histDir, "history.json"),
+		BlacklistPath:    blPath,
+		RunDir:           sockDir,
+		Stdout:           io.Discard,
+		Stderr:           io.Discard,
+	}
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	// Wait for a spawn of the good version; that is the signal
+	// that the blacklist-driven rollback has completed.
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	var sawGood bool
+	for time.Now().Before(deadline) && !sawGood {
+		for _, e := range readHistory(t, cfg.HistoryPath) {
+			if e.Event == EventSpawn && e.Version == "good" {
+				sawGood = true
+				break
+			}
+		}
+		if !sawGood {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}
+	cancel()
+	<-done
+	if !sawGood {
+		t.Fatal("supervisor never spawned rolled-back version")
+	}
+
+	entries := readHistory(t, cfg.HistoryPath)
+	var rollbackReason string
+	for _, e := range entries {
+		if e.Event == EventRollback {
+			rollbackReason = e.Reason
+		}
+		if e.Event == EventSpawn && e.Version == "bad" {
+			t.Errorf("supervisor must not spawn blacklisted version, got %+v", e)
+		}
+	}
+	if rollbackReason != "blacklisted" {
+		t.Errorf("rollback reason = %q, want %q", rollbackReason, "blacklisted")
+	}
+
+	// current should now point at the good slot on disk.
+	curTarget, _ := os.Readlink(filepath.Join(root, "current"))
+	if !strings.HasSuffix(curTarget, "good") {
+		t.Errorf("current = %q, want .../good", curTarget)
 	}
 }

@@ -58,6 +58,11 @@ type Config struct {
 	// HistoryPath overrides the default
 	// <InstallRoot>/state/history.json location.
 	HistoryPath string
+	// BlacklistPath overrides the default
+	// <InstallRoot>/state/blacklist.json location. The supervisor
+	// reads this file before each spawn; the worker writes it when
+	// the operator flags a version as bad (protocol §8).
+	BlacklistPath string
 	// RunDir overrides the default <InstallRoot>/run directory
 	// (used for supervisor.pid and worker.pid).
 	RunDir string
@@ -106,6 +111,9 @@ func (c Config) withDefaults() (Config, error) {
 		}
 		if out.HistoryPath == "" {
 			out.HistoryPath = filepath.Join(out.InstallRoot, "state", "history.json")
+		}
+		if out.BlacklistPath == "" {
+			out.BlacklistPath = filepath.Join(out.InstallRoot, "state", "blacklist.json")
 		}
 		if out.RunDir == "" {
 			out.RunDir = filepath.Join(out.InstallRoot, "run")

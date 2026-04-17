@@ -59,11 +59,21 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 	installRoot := resolveInstallRoot(logger)
 	var srv *agent.Server
 	httpErrCh := make(chan error, 1)
+	// rollbackCh is signalled once by the /api/blacklist handler when
+	// the operator flags the currently-running version as bad. Buffered
+	// so the handler's goroutine never blocks on shutdown.
+	rollbackCh := make(chan struct{}, 1)
 	if httpAddr != "off" {
 		srv = agent.NewServer(agent.Config{
 			Addr:        httpAddr,
 			Logger:      logger,
 			InstallRoot: installRoot,
+			RequestRollback: func() {
+				select {
+				case rollbackCh <- struct{}{}:
+				default:
+				}
+			},
 		})
 		go func() { httpErrCh <- srv.Start(ctx) }()
 		// Give the listener a beat to bind so logs stay ordered; the
@@ -91,8 +101,13 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 		}
 	}
 
+	var rollbackRequested bool
 	select {
 	case <-ctx.Done():
+	case <-rollbackCh:
+		rollbackRequested = true
+		logger.Warn("rollback requested via /api/blacklist",
+			"component", "worker", "version", version.Version)
 	case err := <-httpErrCh:
 		if err != nil {
 			return fmt.Errorf("http server: %w", err)
@@ -107,7 +122,26 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 		}
 	}
 	logger.Info("worker stopped", "component", "worker")
+	if rollbackRequested {
+		// Surface the rollback request as a typed exit error; main
+		// translates it into os.Exit(65) so the supervisor classifies
+		// the exit as ClassRollback per protocol §4.
+		return &exitError{code: 65, reason: "blacklisted-current-version"}
+	}
 	return nil
+}
+
+// exitError asks main to os.Exit with a specific code. It is the
+// worker's channel to surface the protocol's reserved codes (64 no-
+// restart, 65 rollback) without calling os.Exit from deep in the
+// HTTP handler stack.
+type exitError struct {
+	code   int
+	reason string
+}
+
+func (e *exitError) Error() string {
+	return fmt.Sprintf("worker exit %d (%s)", e.code, e.reason)
 }
 
 // envOr returns the value of key, or fallback when the env var is unset

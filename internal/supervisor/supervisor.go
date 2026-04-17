@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
+
+	"github.com/clawmast/clawmast/internal/blacklist"
 )
 
 // StopError wraps a non-zero supervisor exit code surfaced back to
@@ -124,20 +126,70 @@ func (s *Supervisor) recordHistory(e HistoryEntry) {
 	}
 }
 
-// attemptRollback tries to swap current/previous. On success it
-// resets the crash tracker and records a rollback event. When no
-// rollback target is available the function returns a StopError with
-// code 65 so Run surfaces the correct OS-visible exit.
+// attemptRollback tries to swap current/previous after a crash-loop
+// budget exhaustion. On success it resets the crash tracker and
+// records a rollback event. When no rollback target is available the
+// function returns a StopError with code 65 so Run surfaces the
+// correct OS-visible exit.
 func (s *Supervisor) attemptRollback(failingVersion string) error {
+	return s.rollback(failingVersion, "crash-loop", "crash-loop with no rollback target")
+}
+
+// attemptWorkerRequestedRollback handles the class-Rollback exit path
+// (worker exited 65). Distinguished from crash-loop rollback so the
+// history ledger and logs correctly attribute the action.
+func (s *Supervisor) attemptWorkerRequestedRollback(failingVersion string) error {
+	return s.rollback(failingVersion, "rollback-requested", "rollback-requested with no rollback target")
+}
+
+// checkBlacklist looks up version in state/blacklist.json. When the
+// version is listed the supervisor rolls back before spawning — this
+// is how a version the worker marked bad in a prior boot is avoided
+// on the next start, even if the "current" symlink still points at
+// it. The returned bool is true when the caller must "continue" its
+// loop because a rollback has been attempted (either successfully, or
+// already surfaced the StopError via err).
+func (s *Supervisor) checkBlacklist(version string) (bool, error) {
+	if s.cfg.BlacklistPath == "" || version == "" {
+		return false, nil
+	}
+	entries, err := blacklist.Load(s.cfg.BlacklistPath)
+	if err != nil {
+		// A corrupt blacklist must not brick the supervisor; log
+		// and proceed. The worker's atomic write makes this a
+		// near-impossible case outside of operator hand-edits.
+		s.log.Warn("blacklist load failed; proceeding without it",
+			slog.String("path", s.cfg.BlacklistPath),
+			slog.Any("err", err))
+		return false, nil
+	}
+	if !blacklist.Contains(entries, version) {
+		return false, nil
+	}
+	s.log.Warn("current version is blacklisted; rolling back before spawn",
+		slog.String("blocked_version", version))
+	if err := s.rollback(version, "blacklisted", "blacklisted version with no rollback target"); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// rollback is the shared implementation for crash-loop and
+// blacklist-driven rollbacks. reason becomes the history event's
+// reason field; stopMsg is used when no rollback target is available
+// and the supervisor must surface a StopError 65 to the OS.
+func (s *Supervisor) rollback(failingVersion, reason, stopMsg string) error {
 	err := SwapCurrentPrevious(s.cfg.InstallRoot)
 	if err == nil {
 		s.tracker.Reset()
 		s.recordHistory(HistoryEntry{
 			Event:   EventRollback,
 			Version: failingVersion,
-			Reason:  "crash-loop",
+			Reason:  reason,
 		})
-		s.log.Warn("rolled back after crash-loop", slog.String("bad_version", failingVersion))
+		s.log.Warn("rolled back",
+			slog.String("bad_version", failingVersion),
+			slog.String("reason", reason))
 		return nil
 	}
 	if !errors.Is(err, ErrNoRollbackTarget) {
@@ -146,7 +198,7 @@ func (s *Supervisor) attemptRollback(failingVersion string) error {
 	s.recordHistory(HistoryEntry{
 		Event:   EventStop,
 		Version: failingVersion,
-		Reason:  "crash-loop-no-rollback",
+		Reason:  reason + "-no-rollback",
 	})
-	return &StopError{Code: 65, Reason: "crash-loop with no rollback target"}
+	return &StopError{Code: 65, Reason: stopMsg}
 }

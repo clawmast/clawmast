@@ -13,6 +13,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -41,6 +42,17 @@ func main() {
 	defer stop()
 
 	if err := runWorker(ctx, os.Stdout, logger); err != nil {
+		var xe *exitError
+		if errors.As(err, &xe) {
+			// A typed exit — do not print the generic "clawmast: ..."
+			// prefix because the supervisor uses the raw code, not
+			// stderr, to drive its state machine.
+			logger.Info("worker exiting with reserved code",
+				"component", "worker",
+				"code", xe.code,
+				"reason", xe.reason)
+			os.Exit(xe.code)
+		}
 		fmt.Fprintln(os.Stderr, "clawmast:", err)
 		os.Exit(1)
 	}

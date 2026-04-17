@@ -36,6 +36,11 @@ func (s *Supervisor) loop(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if blocked, err := s.checkBlacklist(version); err != nil {
+			return err
+		} else if blocked {
+			continue
+		}
 		outcome, err := s.runOneSpawn(ctx, path, version)
 		if err != nil {
 			return err
@@ -50,7 +55,7 @@ func (s *Supervisor) loop(ctx context.Context) error {
 			})
 			return &StopError{Code: 64, Reason: "worker requested no-restart"}
 		case outcomeRollback:
-			if err := s.attemptRollback(version); err != nil {
+			if err := s.attemptWorkerRequestedRollback(version); err != nil {
 				return err
 			}
 			continue

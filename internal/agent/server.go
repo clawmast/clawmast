@@ -40,6 +40,12 @@ type Config struct {
 	// running in standalone mode with those endpoints returning
 	// 503 Service Unavailable.
 	InstallRoot string
+	// RequestRollback is invoked by the /api/blacklist handler
+	// after the operator flags the currently-running version as
+	// bad. The callback must cause the worker to exit with code 65
+	// so the supervisor performs the symlink swap per protocol §4.
+	// Nil disables the write path (GET still works).
+	RequestRollback func()
 }
 
 // DefaultAddr binds loopback-only by default. Exposing the worker on a
@@ -80,6 +86,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/version", s.handleVersion)
 	s.mux.HandleFunc("GET /api/history", s.handleHistory)
+	s.mux.HandleFunc("GET /api/blacklist", s.handleBlacklistList)
+	s.mux.HandleFunc("POST /api/blacklist", s.handleBlacklistAdd)
 	s.mux.HandleFunc("POST /api/updates/check", s.handleUpdateCheck)
 
 	uiFS, err := fs.Sub(embed.Assets, "dist")

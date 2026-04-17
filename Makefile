@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -74,6 +74,12 @@ rollback-smoke:
 # install.sh, and verifies clawmastd respawns into B across the new symlink.
 upgrade-smoke:
 	bash scripts/upgrade-smoke.sh
+
+# T1-03 — version blacklist smoke. Installs two good versions, then uses
+# POST /api/blacklist to mark the current one as bad and verifies the
+# supervisor rolls back to the previous version.
+blacklist-smoke:
+	bash scripts/blacklist-smoke.sh
 
 clean:
 	rm -rf bin/ dist/
