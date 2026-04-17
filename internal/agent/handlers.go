@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/clawmast/clawmast/internal/history"
+	"github.com/clawmast/clawmast/internal/selfupdate"
 	"github.com/clawmast/clawmast/internal/updater"
 	"github.com/clawmast/clawmast/internal/version"
 )
@@ -155,6 +156,139 @@ func classifyUpdaterError(err error) string {
 		return "bad-url"
 	default:
 		return "unreachable"
+	}
+}
+
+// UpdateInstallResponse is the payload of POST /api/updates/install.
+// On success it mirrors the on-disk outcome of [selfupdate.Apply] so
+// the UI can render "now on v1.2.3, was v1.2.2" without a follow-up
+// /api/version poll. The handler fires [Config.RequestRestart] *after*
+// serialising this response so the client sees the final state before
+// the worker exits to let the supervisor respawn.
+//
+// error_code values mirror handleUpdateCheck where they overlap
+// (bad-signature, channel-mismatch, manifest-missing, ...) and add the
+// install-specific ones from [selfupdate]:
+//
+//   - "bad-sha256"         artifact hash mismatch — signed manifest says
+//     the bytes on the CDN are not what was signed; do not retry until
+//     the operator understands why.
+//   - "size-mismatch"      artifact size differs from the manifest.
+//   - "bad-tarball"        archive is malformed or contains unsafe paths.
+//   - "no-artifact"        manifest carries nothing for this host.
+//   - "already-installed"  running version matches the manifest; no-op.
+//   - "not-configured"     CLAWMAST_UPDATE_URL unset.
+//   - "install-root-unknown"  running standalone without clawmastd.
+//   - "restart-unavailable"   no RequestRestart hook wired.
+type UpdateInstallResponse struct {
+	OK               bool   `json:"ok"`
+	Version          string `json:"version,omitempty"`
+	PreviousVersion  string `json:"previous_version,omitempty"`
+	CurrentAfter     string `json:"current_after,omitempty"`
+	PreviousAfter    string `json:"previous_after,omitempty"`
+	BytesDownloaded  int64  `json:"bytes_downloaded,omitempty"`
+	RestartRequested bool   `json:"restart_requested,omitempty"`
+	ErrorCode        string `json:"error_code,omitempty"`
+	Note             string `json:"note,omitempty"`
+}
+
+// handleUpdateInstall runs the download → verify → rotate pipeline and
+// fires RequestRestart on success. The restart is scheduled on a short
+// timer so the HTTP response flushes before the worker exits; without
+// the delay, the client often sees a TCP RST before reading the body.
+//
+// Guardrails in order:
+//  1. s.updater must be configured (CLAWMAST_UPDATE_URL). Otherwise
+//     we have nowhere to fetch the manifest from.
+//  2. s.cfg.InstallRoot must be known. In standalone mode there is no
+//     versions/ tree to rotate, so install is meaningless.
+//  3. s.cfg.RequestRestart must be wired. Without it we would leave the
+//     worker running the old binary with the new `current` symlink,
+//     which is visually confusing and undermines the supervisor
+//     respawn guarantee.
+func (s *Server) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		writeJSON(w, http.StatusServiceUnavailable, UpdateInstallResponse{
+			ErrorCode: "not-configured",
+			Note:      "CLAWMAST_UPDATE_URL is unset; set it to the channel base URL (for example https://update.clawmast.com/stable) to enable auto-update.",
+		})
+		return
+	}
+	if s.cfg.InstallRoot == "" {
+		writeJSON(w, http.StatusServiceUnavailable, UpdateInstallResponse{
+			ErrorCode: "install-root-unknown",
+			Note:      "install root unknown; /api/updates/install is supervisor-scoped",
+		})
+		return
+	}
+	if s.cfg.RequestRestart == nil {
+		writeJSON(w, http.StatusServiceUnavailable, UpdateInstallResponse{
+			ErrorCode: "restart-unavailable",
+			Note:      "worker was started without a restart hook; refuse to rotate current without a path back to a running version",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	manifest, err := s.updater.Check(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, UpdateInstallResponse{
+			ErrorCode: classifyUpdaterError(err),
+			Note:      err.Error(),
+		})
+		return
+	}
+
+	result, err := selfupdate.Apply(ctx, selfupdate.Config{
+		Manifest:       manifest,
+		InstallRoot:    s.cfg.InstallRoot,
+		CurrentVersion: currentVersionLabel(),
+	})
+	if err != nil {
+		code, status := classifySelfupdateError(err)
+		writeJSON(w, status, UpdateInstallResponse{
+			ErrorCode: code,
+			Note:      err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, UpdateInstallResponse{
+		OK:               true,
+		Version:          result.Version,
+		PreviousVersion:  currentVersionLabel(),
+		CurrentAfter:     result.CurrentAfter,
+		PreviousAfter:    result.PreviousAfter,
+		BytesDownloaded:  result.BytesDownloaded,
+		RestartRequested: true,
+	})
+	// Give the kernel a moment to flush the response before the
+	// supervisor tears down the TCP listener. 250 ms is well inside
+	// the UI polling loop and well outside the usual flush latency.
+	time.AfterFunc(250*time.Millisecond, s.cfg.RequestRestart)
+}
+
+// classifySelfupdateError maps [selfupdate]'s sentinels onto the same
+// error_code string space as classifyUpdaterError plus install-specific
+// codes. Returns the HTTP status to use; integrity failures are 502
+// (the CDN gave us bytes that disagree with the signed manifest) while
+// "no artifact" / "already installed" are 409 (request makes sense but
+// does not describe a state that can be acted upon).
+func classifySelfupdateError(err error) (code string, status int) {
+	switch {
+	case errors.Is(err, selfupdate.ErrBadSHA256):
+		return "bad-sha256", http.StatusBadGateway
+	case errors.Is(err, selfupdate.ErrSizeMismatch):
+		return "size-mismatch", http.StatusBadGateway
+	case errors.Is(err, selfupdate.ErrBadTarball):
+		return "bad-tarball", http.StatusBadGateway
+	case errors.Is(err, selfupdate.ErrNoArtifactForHost):
+		return "no-artifact", http.StatusConflict
+	case errors.Is(err, selfupdate.ErrAlreadyInstalled):
+		return "already-installed", http.StatusConflict
+	default:
+		return "install-failed", http.StatusInternalServerError
 	}
 }
 

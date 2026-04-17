@@ -49,6 +49,14 @@ type Config struct {
 	// so the supervisor performs the symlink swap per protocol §4.
 	// Nil disables the write path (GET still works).
 	RequestRollback func()
+	// RequestRestart is invoked by the /api/updates/install handler
+	// after a successful selfupdate.Apply. The callback must cause
+	// the worker to exit cleanly (code 0) so the supervisor demotes
+	// the spontaneous-graceful-during-Running to ClassUnexpected and
+	// respawns against the freshly-rotated `current` symlink (see
+	// supervisor-protocol.md §4 edge rules). Nil disables the
+	// install path (check-only mode).
+	RequestRestart func()
 	// UpdateBaseURL is the channel directory that serves
 	// manifest.json and manifest.json.minisig. Empty disables the
 	// update-check round-trip; /api/updates/check then returns
@@ -120,6 +128,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/blacklist", s.handleBlacklistList)
 	s.mux.HandleFunc("POST /api/blacklist", s.handleBlacklistAdd)
 	s.mux.HandleFunc("POST /api/updates/check", s.handleUpdateCheck)
+	s.mux.HandleFunc("POST /api/updates/install", s.handleUpdateInstall)
 
 	uiFS, err := fs.Sub(embed.Assets, "dist")
 	if err != nil {

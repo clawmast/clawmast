@@ -65,6 +65,13 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 	// the operator flags the currently-running version as bad. Buffered
 	// so the handler's goroutine never blocks on shutdown.
 	rollbackCh := make(chan struct{}, 1)
+	// restartCh is signalled once by the /api/updates/install handler
+	// after selfupdate.Apply rotates the `current` symlink. The worker
+	// exits cleanly (code 0); the supervisor demotes the
+	// spontaneous-graceful-during-Running to ClassUnexpected and
+	// respawns against the freshly-rotated link (supervisor-protocol.md
+	// §4 edge rules). Buffered so the handler never blocks.
+	restartCh := make(chan struct{}, 1)
 	if httpAddr != "off" {
 		pubKey, err := loadUpdatePubKey(os.Getenv("CLAWMAST_UPDATE_PUBKEY_FILE"))
 		if err != nil {
@@ -77,6 +84,12 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 			RequestRollback: func() {
 				select {
 				case rollbackCh <- struct{}{}:
+				default:
+				}
+			},
+			RequestRestart: func() {
+				select {
+				case restartCh <- struct{}{}:
 				default:
 				}
 			},
@@ -116,6 +129,13 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 	case <-rollbackCh:
 		rollbackRequested = true
 		logger.Warn("rollback requested via /api/blacklist",
+			"component", "worker", "version", version.Version)
+	case <-restartCh:
+		// Clean exit (code 0) on purpose: the supervisor interprets
+		// a graceful exit during Running as unexpected and respawns
+		// against the freshly-rotated `current` link. No rollback
+		// flag here — this is a roll-forward.
+		logger.Info("restart requested via /api/updates/install",
 			"component", "worker", "version", version.Version)
 	case err := <-httpErrCh:
 		if err != nil {
