@@ -1,0 +1,30 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+
+# Go
+/vendor/
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+*.code-workspace
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Web
+/web/node_modules/
+/web/dist/
+
+# Runtime / local dev
+/tmp/
+/logs/
+/.clawmast-dev/
+
+# Task Master (local workspace state)
+/.taskmaster/

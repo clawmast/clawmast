@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-label="ClawMast">
+  <!-- Concept C: Two opposing pincers (upper larger, lower smaller)
+       literally gripping a hex bolt. Most explicit "claw + wrench"
+       read, slightly less abstract than Concept A. -->
+  <g fill="#2563EB">
+    <!-- Upper pincer -->
+    <path d="M2.5 6
+             C2.5 3 7 1.5 12 3
+             C14.5 3.8 16 5 16.8 6.6
+             L13.4 9
+             C12.6 7.8 11 7.2 9 7.5
+             C6.5 7.8 5 9 4.5 10.4 Z"/>
+    <!-- Lower pincer (mirror of upper) -->
+    <path d="M2.5 18
+             C2.5 21 7 22.5 12 21
+             C14.5 20.2 16 19 16.8 17.4
+             L13.4 15
+             C12.6 16.2 11 16.8 9 16.5
+             C6.5 16.2 5 15 4.5 13.6 Z"/>
+    <!-- Hex bolt gripped between pincers -->
+    <path d="M18.4 8.4 L21.6 10.4 L21.6 13.6 L18.4 15.6 L15.2 13.6 L15.2 10.4 Z"/>
+  </g>
+</svg>

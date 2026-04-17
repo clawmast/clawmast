@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 24" aria-label="ClawMast">
+  <!-- Concept B: Open-end wrench whose handle tapers into a segmented
+       lobster tail. Right end is a classic box-wrench opening; left end
+       is three chevron segments evoking tail plates. -->
+  <g fill="#2563EB">
+    <!-- Wrench head with jaw opening to the right -->
+    <path d="M19 6 L28 6 L28 10 L23 10 L23 14 L28 14 L28 18 L19 18 Z"/>
+    <!-- Neck connecting head to tail -->
+    <path d="M14 10 L20 10 L20 14 L14 14 Z"/>
+    <!-- Tail segment 1 (closest to neck) -->
+    <path d="M11 8 L14.5 8 L14.5 16 L11 16 L9 13.5 L9 10.5 Z"/>
+    <!-- Tail segment 2 -->
+    <path d="M6.5 9 L9.5 9 L9.5 15 L6.5 15 L4.5 13 L4.5 11 Z"/>
+    <!-- Tail fan -->
+    <path d="M2 10 L5 10 L5 14 L2 14 L0.5 12 Z"/>
+  </g>
+</svg>

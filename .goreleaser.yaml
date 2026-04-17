@@ -1,0 +1,75 @@
+# ClawMast release / snapshot build configuration.
+#
+# T0-03 scope: cross-platform build stub. `goreleaser build --snapshot --clean`
+# must succeed locally and produce the same artefact layout the future release
+# pipeline will emit. No GitHub release is published from this config yet —
+# that is gated on T0-05 (signing) and T0-13 (release tool).
+#
+# Run:
+#   goreleaser check                       # validate this file
+#   goreleaser build --snapshot --clean    # local multi-platform build
+
+version: 2
+
+project_name: clawmast
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: clawmast
+    main: ./cmd/clawmast
+    binary: clawmast
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/clawmast/clawmast/internal/version.Version={{ .Version }}
+      - -X github.com/clawmast/clawmast/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/clawmast/clawmast/internal/version.BuildTime={{ .CommitDate }}
+
+  - id: clawmastd
+    main: ./cmd/clawmastd
+    binary: clawmastd
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/clawmast/clawmast/internal/version.Version={{ .Version }}
+      - -X github.com/clawmast/clawmast/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/clawmast/clawmast/internal/version.BuildTime={{ .CommitDate }}
+
+archives:
+  - id: default
+    ids: [clawmast, clawmastd]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CLA.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+release:
+  disable: true
+
+changelog:
+  disable: true

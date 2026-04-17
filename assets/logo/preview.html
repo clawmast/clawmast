@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ClawMast Logo Concepts</title>
+<style>
+  :root { color-scheme: dark light; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 32px;
+    background: #0B1220;
+    color: #F8FAFC;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: #94A3B8; font-size: 13px; margin-bottom: 32px; }
+  .concept { margin-bottom: 40px; }
+  .concept h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; color: #E2E8F0; }
+  .concept .tag { color: #94A3B8; font-size: 12px; margin-bottom: 14px; }
+  .sizes { display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap; }
+  .size-cell { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .size-cell .label { color: #64748B; font-size: 11px; font-family: "Geist Mono", ui-monospace, monospace; }
+  .swatch {
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; background: #111827; border: 1px solid #1E293B;
+  }
+  .swatch.light { background: #F8FAFC; border-color: #CBD5E1; }
+  .swatch img { display: block; }
+  .row { display: flex; gap: 10px; align-items: flex-end; }
+  .group-label {
+    font-size: 11px; color: #64748B; margin-bottom: 8px;
+    font-family: "Geist Mono", ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+  <h1>ClawMast — Logo Concepts</h1>
+  <p class="sub">Three directions. Dark surface on the top row of each size block, light surface on the bottom.</p>
+
+  <section class="concept">
+    <h2>A · Claw-as-Wrench <span style="color:#2563EB">(recommended)</span></h2>
+    <p class="tag">One mark, two reads: lobster claw silhouette with a hex socket cutout in the pinch.</p>
+    <div class="sizes" id="row-a"></div>
+  </section>
+
+  <section class="concept">
+    <h2>B · Wrench-Tail</h2>
+    <p class="tag">Open-end wrench whose handle tapers into segmented lobster-tail plates.</p>
+    <div class="sizes" id="row-b"></div>
+  </section>
+
+  <section class="concept">
+    <h2>C · Pincer + Bolt</h2>
+    <p class="tag">Two opposing pincers literally gripping a hex bolt. Most literal read.</p>
+    <div class="sizes" id="row-c"></div>
+  </section>
+
+<script>
+  const SIZES = [16, 20, 24, 32, 64, 128, 256];
+  const CONCEPTS = [
+    { id: "row-a", src: "concept-a-claw-hex.svg" },
+    { id: "row-b", src: "concept-b-wrench-tail.svg" },
+    { id: "row-c", src: "concept-c-pincer-bolt.svg" },
+  ];
+
+  for (const { id, src } of CONCEPTS) {
+    const host = document.getElementById(id);
+    for (const s of SIZES) {
+      const cell = document.createElement("div");
+      cell.className = "size-cell";
+
+      const stack = document.createElement("div");
+      stack.style.display = "flex";
+      stack.style.flexDirection = "column";
+      stack.style.gap = "6px";
+
+      for (const variant of ["dark", "light"]) {
+        const sw = document.createElement("div");
+        sw.className = "swatch" + (variant === "light" ? " light" : "");
+        const pad = Math.max(4, Math.round(s * 0.15));
+        sw.style.width = (s + pad * 2) + "px";
+        sw.style.height = (s + pad * 2) + "px";
+        const img = document.createElement("img");
+        img.src = src;
+        img.width = s;
+        img.height = s;
+        img.alt = "";
+        sw.appendChild(img);
+        stack.appendChild(sw);
+      }
+
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = s + "px";
+
+      cell.appendChild(stack);
+      cell.appendChild(label);
+      host.appendChild(cell);
+    }
+  }
+</script>
+</body>
+</html>

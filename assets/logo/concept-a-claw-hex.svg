@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill-rule="evenodd" aria-label="ClawMast">
+  <!-- Concept A: Claw-as-Wrench.
+       Asymmetric claw silhouette (heavier upper pincer). The pinch opening
+       is a hex socket cutout, reading simultaneously as lobster claw grip
+       and open-end wrench socket. -->
+  <path fill="#2563EB" d="M3.2 8.4
+           C3.2 4.6 7 2.6 11.4 3.1
+           C16 3.6 19.4 5.6 20.6 8.8
+           L20.6 15.2
+           C19.4 18.4 16 20.4 11.4 20.9
+           C7 21.4 3.2 19.4 3.2 15.6
+           L3.2 13
+           L9 13
+           L9 11
+           L3.2 11 Z
+           M16.6 9
+           L19.8 10.8
+           L19.8 13.2
+           L16.6 15
+           L13.4 13.2
+           L13.4 10.8 Z"/>
+</svg>

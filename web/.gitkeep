@@ -1,0 +1,2 @@
+# Populated in T0-04 with a React 19 + Vite SPA.
+# The build output (web/dist) is embedded into the worker via go:embed.
