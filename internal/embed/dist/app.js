@@ -25,6 +25,13 @@
   const historyEmpty = $("history-empty");
   const historyHint = $("history-hint");
   const historyRefreshBtn = $("history-refresh");
+  const blacklistCard = $("blacklist-card");
+  const blacklistList = $("blacklist-list");
+  const blacklistEmpty = $("blacklist-empty");
+  const blacklistResult = $("blacklist-result");
+  const markBadBtn = $("mark-bad");
+
+  let currentVersion = null;
 
   const rtf = new Intl.RelativeTimeFormat("zh-Hans", { numeric: "auto" });
   const tfmt = new Intl.DateTimeFormat("zh-Hans", {
@@ -58,7 +65,11 @@
   async function loadVersion() {
     try {
       const v = await jfetch("/api/version");
-      versionEl.textContent = v.version || "dev";
+      // Prefer the supervisor-assigned label (matches what the
+      // installer and blacklist use); fall back to the ldflags
+      // version in standalone mode.
+      currentVersion = v.label || v.version || "";
+      versionEl.textContent = currentVersion || "dev";
       buildEl.textContent = `${v.commit || "none"} · ${v.build_time || "unknown"}`;
       fullEl.textContent = v.full || "";
     } catch (err) {
@@ -190,12 +201,104 @@
     }
   }
 
+  // --- blacklist -------------------------------------------------------
+
+  function fmtTs(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return `${tfmt.format(d)} · ${fmtRelative(d)}`;
+  }
+
+  function renderBlacklistEntry(e) {
+    const li = document.createElement("li");
+    li.className = "bl-item";
+    const head = document.createElement("div");
+    head.className = "bl-head";
+    const ver = document.createElement("span");
+    ver.className = "mono bl-version";
+    ver.textContent = e.version;
+    head.appendChild(ver);
+    if (e.version && e.version === currentVersion) {
+      const tag = document.createElement("span");
+      tag.className = "bl-tag";
+      tag.textContent = "当前";
+      head.appendChild(tag);
+    }
+    const meta = document.createElement("div");
+    meta.className = "bl-meta mono small";
+    meta.textContent = [fmtTs(e.ts), e.reason].filter(Boolean).join(" · ");
+    li.appendChild(head);
+    li.appendChild(meta);
+    return li;
+  }
+
+  async function loadBlacklist() {
+    try {
+      const res = await fetch("/api/blacklist");
+      if (res.status === 503) {
+        blacklistCard.hidden = true;
+        return;
+      }
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const payload = await res.json();
+      blacklistCard.hidden = false;
+      blacklistList.replaceChildren();
+      const entries = (payload.entries || []).slice().reverse();
+      for (const e of entries) blacklistList.appendChild(renderBlacklistEntry(e));
+      blacklistEmpty.hidden = entries.length > 0;
+    } catch (err) {
+      blacklistCard.hidden = false;
+      blacklistEmpty.hidden = false;
+      blacklistEmpty.textContent = `加载失败:${err.message || err}`;
+    }
+  }
+
+  async function markCurrentBad() {
+    const ver = currentVersion || "(未知)";
+    const ok = window.confirm(
+      `确认把版本 ${ver} 标记为坏?\n\n监工(clawmastd)将立即回滚到上一个版本,` +
+      `并在后续启动中拒绝再次拉起该版本。`,
+    );
+    if (!ok) return;
+    markBadBtn.dataset.loading = "1";
+    markBadBtn.disabled = true;
+    try {
+      const res = await fetch("/api/blacklist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "user-marked-bad" }),
+      });
+      if (!res.ok && res.status !== 202) {
+        throw new Error(`${res.status} ${res.statusText}`);
+      }
+      const payload = await res.json();
+      blacklistResult.hidden = false;
+      if (payload.rollback_requested) {
+        blacklistResult.textContent =
+          `已标记 ${payload.marked_version} 为坏,worker 即将退出(65),监工会翻转符号链接。` +
+          `几秒后此页面可能短暂中断,恢复后将运行在上一个版本。`;
+        setStatus("error", "即将回滚…");
+      } else {
+        blacklistResult.textContent = `已标记 ${payload.marked_version} 为坏(未触发回滚)。`;
+      }
+      await loadBlacklist();
+    } catch (err) {
+      blacklistResult.hidden = false;
+      blacklistResult.textContent = `标记失败:${err.message || err}`;
+    } finally {
+      markBadBtn.dataset.loading = "0";
+      markBadBtn.disabled = false;
+    }
+  }
+
   historyRefreshBtn.addEventListener("click", loadHistory);
   checkBtn.addEventListener("click", checkUpdates);
+  markBadBtn.addEventListener("click", markCurrentBad);
 
-  loadVersion();
+  loadVersion().then(loadBlacklist);
   poll();
   loadHistory();
   setInterval(poll, 5000);
   setInterval(loadHistory, 15000);
+  setInterval(loadBlacklist, 30000);
 })();

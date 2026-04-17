@@ -118,6 +118,12 @@ body {
   min-height: 32px;
 }
 .btn.ghost:hover { color: var(--text); border-color: var(--text-3); background: var(--surface-2); }
+.btn.danger {
+  background: rgba(220, 38, 38, 0.12);
+  color: #FECACA;
+  border-color: rgba(220, 38, 38, 0.35);
+}
+.btn.danger:hover { background: rgba(220, 38, 38, 0.2); border-color: rgba(220, 38, 38, 0.6); color: #FFE4E6; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -176,6 +182,35 @@ body {
 .tl-meta { color: var(--text-3); font-size: 12px; font-family: var(--font-mono); }
 .muted { color: var(--text-3); }
 .small { font-size: 12px; }
+
+/* Blacklist card — list of versions the supervisor must refuse to spawn.
+ * Each entry shows the version tag (highlighted when it is the running
+ * one), the timestamp and the reason on a second muted line.
+ */
+.blacklist-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.bl-item {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.bl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bl-version { color: #FECACA; }
+.bl-tag {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, 0.18);
+  color: #FECACA;
+  border: 1px solid rgba(220, 38, 38, 0.45);
+}
+.bl-meta { color: var(--text-3); }
 
 .foot {
   margin-top: 8px;

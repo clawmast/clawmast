@@ -80,6 +80,22 @@
         <div class="hint muted" id="history-empty" hidden>暂无记录。</div>
       </section>
 
+      <section class="card blacklist" id="blacklist-card" hidden>
+        <div class="row spaced">
+          <div>
+            <div class="label">版本黑名单</div>
+            <div class="hint" id="blacklist-hint">把当前版本标记为坏:监工将回滚到上一个版本,并拒绝再次拉起被标记的版本。</div>
+          </div>
+          <button id="mark-bad" class="btn danger" type="button">
+            <span class="btn-label">标记当前为坏</span>
+            <span class="btn-spinner" aria-hidden="true"></span>
+          </button>
+        </div>
+        <ul class="blacklist-list" id="blacklist-list" aria-live="polite"></ul>
+        <div class="hint muted" id="blacklist-empty">暂无被拉黑的版本。</div>
+        <div class="hint muted" id="blacklist-result" hidden></div>
+      </section>
+
       <footer class="foot">
         <span class="mono small" id="footer-full">—</span>
         <span class="sep">·</span>
