@@ -262,3 +262,18 @@ body {
   .shell { padding-top: 64px; }
   .hero h1 { font-size: 34px; }
 }
+
+/* Update-card tones encode the severity of the last /api/updates/check
+ * result. Applied by the JS via tone-{ok,warn,danger,muted} — the
+ * headline colour shifts while the rest of the card layout stays put.
+ * tone-danger in particular exists because a bad-signature result must
+ * be visually impossible to miss: do not install an unsigned binary. */
+.update .update-result { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.update.tone-ok       #update-result-text { color: var(--success); }
+.update.tone-warn     #update-result-text { color: var(--warning); }
+.update.tone-danger   #update-result-text { color: #FCA5A5; font-weight: 600; }
+.update.tone-muted    #update-result-text { color: var(--text-3); }
+.update.tone-danger {
+  border-color: rgba(220, 38, 38, 0.5);
+  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.25);
+}

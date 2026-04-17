@@ -44,7 +44,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card update" id="update-card">
         <div class="row spaced">
           <div>
             <div class="label">更新</div>
@@ -55,9 +55,16 @@
             <span class="btn-spinner" aria-hidden="true"></span>
           </button>
         </div>
-        <div class="row" id="update-result" hidden>
-          <span class="label">结果</span>
-          <span class="mono small" id="update-result-text">—</span>
+        <div class="row" id="update-channel-row">
+          <span class="label">通道</span>
+          <span class="mono small" id="update-channel">—</span>
+        </div>
+        <div class="update-result" id="update-result" hidden>
+          <div class="row">
+            <span class="label">状态</span>
+            <span class="mono small" id="update-result-text">—</span>
+          </div>
+          <div class="hint muted" id="update-result-meta" hidden></div>
         </div>
       </section>
 

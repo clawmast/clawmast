@@ -17,8 +17,11 @@
   const statusBadge = $("status-badge");
   const statusText = $("status-text");
   const checkBtn = $("check-updates");
+  const updateCard = $("update-card");
   const updateResult = $("update-result");
   const updateResultText = $("update-result-text");
+  const updateResultMeta = $("update-result-meta");
+  const updateChannelEl = $("update-channel");
   const updateNote = $("update-note");
   const historyCard = $("history-card");
   const historyList = $("history-list");
@@ -89,24 +92,78 @@
     }
   }
 
+  // Copy tables for /api/updates/check outcomes. Keyed on the "source"
+  // field so we render the right headline without string-matching the
+  // note. "error" disambiguates via error_code.
+  const UPDATE_SOURCE_COPY = {
+    "signed-manifest": { tone: "ok" },
+    "not-configured":  { tone: "muted", headline: "未配置更新通道" },
+  };
+  const UPDATE_ERROR_COPY = {
+    "bad-signature":    { tone: "danger", headline: "签名验证失败 — 切勿安装" },
+    "channel-mismatch": { tone: "warn",   headline: "通道不一致" },
+    "manifest-missing": { tone: "warn",   headline: "通道未发布 manifest" },
+    "manifest-too-big": { tone: "warn",   headline: "manifest 超出体积上限" },
+    "bad-url":          { tone: "warn",   headline: "更新通道 URL 无效" },
+    "unreachable":      { tone: "warn",   headline: "无法连接更新通道" },
+  };
+
+  function applyUpdateTone(tone) {
+    updateCard.classList.remove("tone-ok", "tone-warn", "tone-danger", "tone-muted");
+    if (tone) updateCard.classList.add(`tone-${tone}`);
+  }
+
   async function checkUpdates() {
     checkBtn.dataset.loading = "1";
     checkBtn.disabled = true;
     try {
       const u = await jfetch("/api/updates/check", { method: "POST" });
-      updateResult.hidden = false;
-      const label = u.update_available
-        ? `有新版本:${u.latest}(当前 ${u.current})`
-        : `已是最新:${u.current}`;
-      updateResultText.textContent = label;
-      if (u.note) updateNote.textContent = u.note;
+      renderUpdateResult(u);
     } catch (err) {
       updateResult.hidden = false;
-      updateResultText.textContent = `检查失败:${err.message || err}`;
+      applyUpdateTone("danger");
+      updateResultText.textContent = `请求失败:${err.message || err}`;
+      updateResultMeta.hidden = true;
     } finally {
       checkBtn.dataset.loading = "0";
       checkBtn.disabled = false;
     }
+  }
+
+  function renderUpdateResult(u) {
+    updateResult.hidden = false;
+    if (u.channel) updateChannelEl.textContent = u.channel;
+
+    let tone, headline, metaBits = [];
+    if (u.source === "signed-manifest") {
+      tone = u.update_available ? "warn" : "ok";
+      headline = u.update_available
+        ? `有新版本:${u.latest}(当前 ${u.current})`
+        : `已是最新:${u.current}`;
+      if (u.published_at) metaBits.push(`发布于 ${u.published_at}`);
+      if (u.notes) metaBits.push(u.notes);
+    } else if (u.source === "error") {
+      const copy = UPDATE_ERROR_COPY[u.error_code] || UPDATE_ERROR_COPY.unreachable;
+      tone = copy.tone;
+      headline = copy.headline;
+      if (u.note) metaBits.push(u.note);
+    } else {
+      const copy = UPDATE_SOURCE_COPY[u.source] || { tone: "muted", headline: u.source || "未知来源" };
+      tone = copy.tone;
+      headline = copy.headline || copy.headline || u.source;
+      if (u.note) metaBits.push(u.note);
+    }
+
+    applyUpdateTone(tone);
+    updateResultText.textContent = headline;
+    if (metaBits.length) {
+      updateResultMeta.hidden = false;
+      updateResultMeta.textContent = metaBits.join(" · ");
+    } else {
+      updateResultMeta.hidden = true;
+      updateResultMeta.textContent = "";
+    }
+    if (u.source === "not-configured" && u.note) updateNote.textContent = u.note;
   }
 
   // --- history timeline -------------------------------------------------
