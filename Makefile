@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -87,6 +87,13 @@ blacklist-smoke:
 # signature (happy path + tampering).
 update-smoke:
 	bash scripts/update-smoke.sh
+
+# T2-02 — self-update install smoke. Installs worker A, serves a signed
+# manifest advertising worker B over a local HTTP server, POSTs
+# /api/updates/install, and asserts the supervisor respawns into B with
+# current/previous rotated correctly.
+update-install-smoke:
+	bash scripts/update-install-smoke.sh
 
 clean:
 	rm -rf bin/ dist/
