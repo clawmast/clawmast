@@ -22,6 +22,7 @@ TEMPLATES_DIR="${SCRIPT_DIR}/templates"
 PREFIX="${CLAWMAST_HOME:-${HOME}/.clawmast}"
 VERSION_LABEL=""
 SOURCE_MODE="auto"      # auto | local | build
+BIN_DIR=""              # override of ${REPO_ROOT}/bin; see --bin-dir
 INSTALL_SERVICE="yes"
 FORCE="no"
 CHANNEL_DEFAULT="stable"
@@ -37,6 +38,8 @@ Options:
                           auto  — prefer ./bin, fall back to `go build` (default)
                           local — require pre-built binaries in ./bin
                           build — always rebuild from this repo
+  --bin-dir PATH          Read pre-built clawmast / clawmastd from PATH
+                          instead of ./bin. Forces --source=local.
   --no-service            Skip writing / enabling the launchd / systemd unit
   --force                 Overwrite existing install without prompting
   -h, --help              Show this help and exit
@@ -57,6 +60,7 @@ while (( $# > 0 )); do
     --prefix)     PREFIX="$2"; shift 2 ;;
     --version)    VERSION_LABEL="$2"; shift 2 ;;
     --source)     SOURCE_MODE="$2"; shift 2 ;;
+    --bin-dir)    BIN_DIR="$2"; SOURCE_MODE="local"; shift 2 ;;
     --no-service) INSTALL_SERVICE="no"; shift ;;
     --force)      FORCE="yes"; shift ;;
     -h|--help)    usage; exit 0 ;;
@@ -89,17 +93,21 @@ build_from_source() {
 }
 
 ensure_binaries() {
-  local bin_dir="${REPO_ROOT}/bin"
+  if [[ -z "${BIN_DIR}" ]]; then
+    BIN_DIR="${REPO_ROOT}/bin"
+  fi
   case "${SOURCE_MODE}" in
     build)
+      [[ "${BIN_DIR}" == "${REPO_ROOT}/bin" ]] \
+        || die "--bin-dir is incompatible with --source=build"
       build_from_source ;;
     local)
-      [[ -x "${bin_dir}/clawmast"  ]] || die "${bin_dir}/clawmast not found; run 'make build' first or use --source=build"
-      [[ -x "${bin_dir}/clawmastd" ]] || die "${bin_dir}/clawmastd not found; run 'make build' first or use --source=build"
+      [[ -x "${BIN_DIR}/clawmast"  ]] || die "${BIN_DIR}/clawmast not found; run 'make build' first or use --source=build"
+      [[ -x "${BIN_DIR}/clawmastd" ]] || die "${BIN_DIR}/clawmastd not found; run 'make build' first or use --source=build"
       ;;
     auto)
-      if [[ -x "${bin_dir}/clawmast" && -x "${bin_dir}/clawmastd" ]]; then
-        log "using pre-built binaries in ${bin_dir}"
+      if [[ -x "${BIN_DIR}/clawmast" && -x "${BIN_DIR}/clawmastd" ]]; then
+        log "using pre-built binaries in ${BIN_DIR}"
       else
         build_from_source
       fi
@@ -112,7 +120,7 @@ ensure_binaries() {
 
 derive_version() {
   local v
-  v="$("${REPO_ROOT}/bin/clawmast" version 2>/dev/null | awk '{print $3}' | tr -d ' ' || true)"
+  v="$("${BIN_DIR}/clawmast" version 2>/dev/null | awk '{print $3}' | tr -d ' ' || true)"
   [[ -n "${v}" ]] || v="dev"
   # Strip leading "v" so the label matches $(git describe --tags)'s
   # bare form while the directory reads naturally.
@@ -181,7 +189,7 @@ EOF
 }
 
 install_binaries() {
-  local src="${REPO_ROOT}/bin"
+  local src="${BIN_DIR}"
   install -m 0755 "${src}/clawmastd" "${PREFIX}/bin/clawmastd.new"
   mv -f "${PREFIX}/bin/clawmastd.new" "${PREFIX}/bin/clawmastd"
 

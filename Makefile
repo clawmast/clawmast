@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -69,6 +69,11 @@ install-smoke:
 # previous after the crash-loop budget is exhausted.
 rollback-smoke:
 	bash scripts/rollback-smoke.sh
+
+# T0-10 — operator-driven upgrade smoke. Installs worker A, rotates to B via
+# install.sh, and verifies clawmastd respawns into B across the new symlink.
+upgrade-smoke:
+	bash scripts/upgrade-smoke.sh
 
 clean:
 	rm -rf bin/ dist/
