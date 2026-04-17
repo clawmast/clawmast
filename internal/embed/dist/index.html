@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>ClawMast</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell" aria-live="polite">
+      <header class="hero">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 12a8 8 0 1 0 16 0a8 8 0 1 0-16 0"/>
+            <path d="M8 12h8"/>
+            <path d="M12 8v8"/>
+          </svg>
+        </div>
+        <h1>ClawMast</h1>
+        <p class="tagline">本地优先的 OpenClaw 恢复控制台</p>
+      </header>
+
+      <section class="card status" id="status-card">
+        <div class="row">
+          <span class="label">运行状态</span>
+          <span class="badge badge-unknown" id="status-badge">
+            <span class="dot" aria-hidden="true"></span>
+            <span id="status-text">正在检测…</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="label">版本</span>
+          <span class="mono" id="version">—</span>
+        </div>
+        <div class="row">
+          <span class="label">构建</span>
+          <span class="mono small" id="build">—</span>
+        </div>
+        <div class="row">
+          <span class="label">运行时长</span>
+          <span class="mono" id="uptime">—</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row spaced">
+          <div>
+            <div class="label">更新</div>
+            <div class="hint" id="update-note">点击检查是否有新版本。</div>
+          </div>
+          <button id="check-updates" class="btn primary" type="button">
+            <span class="btn-label">检查更新</span>
+            <span class="btn-spinner" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="row" id="update-result" hidden>
+          <span class="label">结果</span>
+          <span class="mono small" id="update-result-text">—</span>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <span class="mono small" id="footer-full">—</span>
+        <span class="sep">·</span>
+        <a href="https://clawmast.com" class="link">clawmast.com</a>
+      </footer>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

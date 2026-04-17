@@ -15,15 +15,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/clawmast/clawmast/internal/agent"
 	"github.com/clawmast/clawmast/internal/sdnotify"
 	"github.com/clawmast/clawmast/internal/version"
 )
 
 // runWorker is the worker entry point. It runs until ctx is cancelled
 // (by SIGINT / SIGTERM) or until an unrecoverable error surfaces.
-// Iteration 0 has no HTTP server yet (T0-03 et al.); the worker just
-// stands up the supervisor handshake so clawmastd can observe a full
-// Starting → Running → Stopping lifecycle.
+// Iteration 0 boots the embedded UI / JSON API (architecture/refactor.md
+// §9: "UI shows version, check for updates button") in parallel with
+// the supervisor handshake so clawmastd can observe a full Starting →
+// Running → Stopping lifecycle.
 func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 	client, err := sdnotify.Open()
 	supervised := true
@@ -48,6 +50,28 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 
 	fmt.Fprintf(out, "clawmast worker %s (iteration 0 skeleton)\n", version.Full())
 
+	// Boot the HTTP server before sending READY so health checks land
+	// on a listener that is already accepting traffic. The server runs
+	// in a goroutine and is shut down from the defer chain when ctx is
+	// cancelled; any startup failure is surfaced via startErr.
+	httpAddr := envOr("CLAWMAST_HTTP_ADDR", agent.DefaultAddr)
+	var srv *agent.Server
+	httpErrCh := make(chan error, 1)
+	if httpAddr != "off" {
+		srv = agent.NewServer(agent.Config{Addr: httpAddr, Logger: logger})
+		go func() { httpErrCh <- srv.Start(ctx) }()
+		// Give the listener a beat to bind so logs stay ordered; the
+		// bound address is only known after Start.
+		time.Sleep(20 * time.Millisecond)
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+	} else {
+		logger.Info("http server disabled", "component", "worker", "reason", "CLAWMAST_HTTP_ADDR=off")
+	}
+
 	if supervised {
 		if err := client.Ready(); err != nil {
 			return fmt.Errorf("send READY: %w", err)
@@ -61,7 +85,13 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 		}
 	}
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case err := <-httpErrCh:
+		if err != nil {
+			return fmt.Errorf("http server: %w", err)
+		}
+	}
 
 	if supervised {
 		if err := client.Stopping(); err != nil {
@@ -72,6 +102,16 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 	}
 	logger.Info("worker stopped", "component", "worker")
 	return nil
+}
+
+// envOr returns the value of key, or fallback when the env var is unset
+// or empty. Local helper to avoid pulling in a config library for one
+// variable.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // heartbeat ticks WATCHDOG=1 every interval until ctx is cancelled.

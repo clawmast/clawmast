@@ -78,12 +78,39 @@ assert_target  "${PREFIX}/current"  "versions/v0.0.2"
 assert_target  "${PREFIX}/previous" "versions/v0.0.1"
 
 echo "[smoke] end-to-end: clawmastd boots against install root"
-"${PREFIX}/bin/clawmastd" -install-root "${PREFIX}" > "${PREFIX}/logs/smoke.log" 2>&1 &
+# Use a dedicated port so parallel runs and the developer's own worker
+# on the default 17080 never collide.
+SMOKE_PORT=17091
+CLAWMAST_HTTP_ADDR="127.0.0.1:${SMOKE_PORT}" \
+  "${PREFIX}/bin/clawmastd" -install-root "${PREFIX}" \
+  > "${PREFIX}/logs/smoke.log" 2>&1 &
 SUP=$!
 for i in $(seq 1 50); do
   grep -q "worker ready" "${PREFIX}/logs/smoke.log" 2>/dev/null && break
   sleep 0.1
 done
+
+# Probe the embedded UI + JSON API while the worker is up
+# (refactor.md §9: "UI shows version, check for updates button").
+echo "[smoke] probing worker HTTP surface on :${SMOKE_PORT}"
+curl -sf "http://127.0.0.1:${SMOKE_PORT}/"             > "${PREFIX}/logs/index.html" \
+  || { echo "FAIL: GET / did not return 200"; cat "${PREFIX}/logs/smoke.log"; exit 1; }
+curl -sf "http://127.0.0.1:${SMOKE_PORT}/api/health"   > "${PREFIX}/logs/health.json" \
+  || { echo "FAIL: /api/health did not return 200";   exit 1; }
+curl -sf "http://127.0.0.1:${SMOKE_PORT}/api/version"  > "${PREFIX}/logs/version.json" \
+  || { echo "FAIL: /api/version did not return 200";  exit 1; }
+curl -sf -X POST "http://127.0.0.1:${SMOKE_PORT}/api/updates/check" \
+  > "${PREFIX}/logs/updates.json" \
+  || { echo "FAIL: /api/updates/check did not return 200"; exit 1; }
+
+grep -q '<title>ClawMast</title>'   "${PREFIX}/logs/index.html"   || { echo "FAIL: index.html missing title"; exit 1; }
+grep -q '"ok":true'                 "${PREFIX}/logs/health.json"  || { echo "FAIL: health.json missing ok=true"; exit 1; }
+# /api/version reflects internal/version.Version (ldflags), not the
+# install-root symlink label. Just verify the payload is well-formed.
+grep -q '"version":'                "${PREFIX}/logs/version.json" || { echo "FAIL: version.json missing version field"; exit 1; }
+grep -q '"go_version":"go1'         "${PREFIX}/logs/version.json" || { echo "FAIL: version.json missing go_version"; exit 1; }
+grep -q '"update_available":false'  "${PREFIX}/logs/updates.json" || { echo "FAIL: updates.json missing update_available field"; exit 1; }
+
 kill -TERM "${SUP}"
 wait "${SUP}"
 EXIT=$?
