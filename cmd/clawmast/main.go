@@ -1,22 +1,76 @@
 // Command clawmast is the ClawMast worker process.
 //
-// It will host the local HTTP API, the embedded React+Vite UI, the PTY
-// bridge, the gateway orchestrator, and (optionally) the cloud tunnel
-// client. It is supervised by clawmastd.
+// It is the long-running agent clawmastd supervises. In production
+// clawmast hosts the local HTTP API, the embedded React+Vite UI, the
+// PTY bridge, the gateway orchestrator, and (optionally) the cloud
+// tunnel client. During Iteration 0 it ships only the handshake with
+// the supervisor — enough to exercise Starting → Running → Stopping
+// end-to-end (architecture/supervisor-protocol.md §4).
+//
+// Cross-platform by design (AGENTS.md R5): the worker compiles on
+// Linux, macOS and Windows. On Windows there is no supervisor so the
+// run loop simply runs unsupervised.
 package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/clawmast/clawmast/internal/version"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println(version.Full())
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "-v", "--version":
+			fmt.Println(version.Full())
+			return
+		case "help", "-h", "--help":
+			printUsage(os.Stdout)
+			return
+		}
 	}
-	fmt.Printf("clawmast worker %s\n", version.Full())
-	fmt.Println("(Iteration 0 walking skeleton — HTTP server lands in T0-03)")
+
+	level := parseLogLevel(os.Getenv("CLAWMAST_LOG_LEVEL"))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+
+	ctx, stop := workerSignalContext()
+	defer stop()
+
+	if err := runWorker(ctx, os.Stdout, logger); err != nil {
+		fmt.Fprintln(os.Stderr, "clawmast:", err)
+		os.Exit(1)
+	}
+}
+
+// parseLogLevel mirrors clawmastd's handling: unknown values fall
+// back to info so a typo does not crash the worker.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	}
+	return slog.LevelInfo
+}
+
+func printUsage(w *os.File) {
+	fmt.Fprintln(w, "Usage: clawmast [subcommand]")
+	fmt.Fprintln(w, "Subcommands:")
+	fmt.Fprintln(w, "  version   Print build metadata and exit")
+	fmt.Fprintln(w, "  help      Print this help and exit")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Without a subcommand, clawmast runs the worker loop. When")
+	fmt.Fprintln(w, "launched under clawmastd (NOTIFY_SOCKET in environment), it")
+	fmt.Fprintln(w, "sends READY=1, WATCHDOG=1 and STOPPING=1 per")
+	fmt.Fprintln(w, "architecture/supervisor-protocol.md §5.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Environment:")
+	fmt.Fprintln(w, "  CLAWMAST_LOG_LEVEL   debug | info | warn | error (default info)")
 }
