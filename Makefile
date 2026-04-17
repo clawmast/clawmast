@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -53,6 +53,16 @@ smoke: build
 	@./bin/clawmastd version | grep -Eqv 'none|unknown' \
 		|| { echo "SMOKE FAIL: clawmastd ldflags fallback detected"; exit 1; }
 	@echo "== SMOKE OK =="
+
+# Run scripts/install.sh against the local checkout. Use CLAWMAST_HOME to
+# override the default ~/.clawmast install root.
+install: build
+	bash scripts/install.sh --source local
+
+# CI-friendly smoke test: installs into a throwaway prefix with --no-service
+# and verifies the on-disk layout + a clawmastd boot/shutdown round-trip.
+install-smoke:
+	bash scripts/install-smoke.sh
 
 clean:
 	rm -rf bin/ dist/

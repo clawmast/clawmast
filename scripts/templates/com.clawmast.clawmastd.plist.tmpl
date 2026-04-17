@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.clawmast.clawmastd</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@@CLAWMASTD_BIN@@</string>
+        <string>-install-root</string>
+        <string>@@CLAWMAST_HOME@@</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CLAWMAST_HOME</key>
+        <string>@@CLAWMAST_HOME@@</string>
+    </dict>
+
+    <!-- RunAtLoad starts clawmastd on user login. KeepAlive ensures
+         launchd restarts it if clawmastd itself ever exits with a
+         non-zero status; supervisor-protocol.md §6.3 reserves exit
+         64 for "do not restart" which launchd respects via
+         SuccessfulExit. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>@@LOG_DIR@@/clawmastd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>@@LOG_DIR@@/clawmastd.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

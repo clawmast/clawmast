@@ -1,0 +1,39 @@
+[Unit]
+Description=ClawMast supervisor (clawmastd)
+Documentation=https://github.com/clawmast/clawmast
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@@CLAWMASTD_BIN@@ -install-root @@CLAWMAST_HOME@@
+Environment=CLAWMAST_HOME=@@CLAWMAST_HOME@@
+
+# clawmastd implements the sd_notify subset described in
+# architecture/supervisor-protocol.md; Type=simple is correct because
+# clawmastd itself does not notify — it is the notify *listener* for
+# the worker it supervises.
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+# Exit code 64 means "do not restart" (supervisor-protocol.md §6.3).
+# Tell systemd to treat it as a successful exit so Restart=on-failure
+# does not re-launch.
+SuccessExitStatus=0 64
+
+StandardOutput=journal
+StandardError=journal
+
+# Harden the user service: clawmastd only reads its install tree.
+# PrivateTmp is safe because the unix notify socket lives under
+# @@CLAWMAST_HOME@@/run, not /tmp.
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@@CLAWMAST_HOME@@
+
+[Install]
+WantedBy=default.target
