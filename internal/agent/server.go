@@ -23,6 +23,7 @@ import (
 	"aead.dev/minisign"
 
 	"github.com/clawmast/clawmast/internal/embed"
+	"github.com/clawmast/clawmast/internal/openclaw"
 	"github.com/clawmast/clawmast/internal/updater"
 )
 
@@ -72,12 +73,24 @@ type Config struct {
 	// freshly generated key; production builds leave it zero and
 	// fall back to updater.MustDevPublicKey.
 	UpdatePubKey minisign.PublicKey
+	// OpenClaw, when non-nil, enables the /api/openclaw/* endpoints.
+	// The Manager's Start loop runs independently of the HTTP server
+	// lifecycle; the Server only reads Manager.Get() and forwards
+	// Cascade events.
+	OpenClaw *openclaw.Manager
+	// Token, when non-zero, gates /api/** (except /api/health) on a
+	// Bearer token matching Token.Value. Loopback clients are exempt
+	// per the I3 contract: the local dashboard stays friction-free,
+	// remote clients must authenticate.
+	Token Token
 }
 
-// DefaultAddr binds loopback-only by default. Exposing the worker on a
-// non-loopback interface is a deliberate act that must be gated on
-// authentication (shipped in a later iteration).
-const DefaultAddr = "127.0.0.1:17080"
+// DefaultAddr now binds on all interfaces so a Mac mini on a LAN can
+// be reached from the operator's laptop without an SSH tunnel. The
+// bearer-token middleware enforces that unauthenticated remote
+// requests are rejected; loopback clients remain exempt to keep the
+// local dashboard zero-config.
+const DefaultAddr = "0.0.0.0:17080"
 
 // Server owns the embedded mux and the net.Listener. It is safe to
 // call Start exactly once.
@@ -91,6 +104,10 @@ type Server struct {
 	// updater is nil when Config.UpdateBaseURL is empty; the handler
 	// uses that to short-circuit to source="not-configured".
 	updater *updater.Client
+	// openclaw is a convenience alias kept in sync with cfg.OpenClaw
+	// so handler methods can check one field instead of chasing the
+	// config pointer.
+	openclaw *openclaw.Manager
 }
 
 // NewServer constructs a Server but does not bind the listener; call
@@ -106,7 +123,7 @@ func NewServer(cfg Config) *Server {
 	if cfg.UpdateChannel == "" {
 		cfg.UpdateChannel = updater.DefaultChannel
 	}
-	s := &Server{cfg: cfg, log: cfg.Logger, mux: http.NewServeMux()}
+	s := &Server{cfg: cfg, log: cfg.Logger, mux: http.NewServeMux(), openclaw: cfg.OpenClaw}
 	if cfg.UpdateBaseURL != "" {
 		key := cfg.UpdatePubKey
 		if key.ID() == 0 {
@@ -118,9 +135,8 @@ func NewServer(cfg Config) *Server {
 	return s
 }
 
-// routes wires the Iteration 0 endpoints. Order matters only for the
-// UI fallback: /api/ is an explicit subtree so the static handler at /
-// never shadows it.
+// routes wires the HTTP endpoints and returns the public handler
+// after bearer-middleware wrapping.
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/version", s.handleVersion)
@@ -129,6 +145,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/blacklist", s.handleBlacklistAdd)
 	s.mux.HandleFunc("POST /api/updates/check", s.handleUpdateCheck)
 	s.mux.HandleFunc("POST /api/updates/install", s.handleUpdateInstall)
+	s.mux.HandleFunc("GET /api/openclaw/status", s.handleOpenclawStatus)
+	s.mux.HandleFunc("POST /api/openclaw/fix", s.handleOpenclawFix)
+	s.mux.HandleFunc("POST /api/openclaw/action", s.handleOpenclawAction)
 
 	uiFS, err := fs.Sub(embed.Assets, "dist")
 	if err != nil {
@@ -139,6 +158,17 @@ func (s *Server) routes() {
 		return
 	}
 	s.mux.Handle("GET /", http.FileServerFS(uiFS))
+}
+
+// publicHandler returns the mux wrapped in the bearer middleware when
+// Config.Token is set. /api/health stays public so launchd / uptime
+// monitors can probe without credentials.
+func (s *Server) publicHandler() http.Handler {
+	if s.cfg.Token.Value == "" {
+		return s.mux
+	}
+	public := map[string]bool{"/api/health": true}
+	return bearerMiddleware(s.cfg.Token, public, s.log, s.mux)
 }
 
 // Start binds the listener and runs the server until ctx is cancelled
@@ -153,7 +183,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.ln = ln
 	s.started = time.Now()
 	s.srv = &http.Server{
-		Handler:           s.mux,
+		Handler:           s.publicHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	s.log.Info("http server listening",
@@ -185,11 +215,17 @@ func (s *Server) Addr() string {
 	return s.ln.Addr().String()
 }
 
-// Handler returns the underlying mux, intended for use in tests that
-// want to exercise the HTTP surface through httptest.NewServer
-// without booting Start's goroutine (and the lifecycle bookkeeping
-// that goes with it).
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the wrapped public handler (with bearer middleware
+// when a token is configured), intended for use in tests that want to
+// exercise the full HTTP surface through httptest.NewServer without
+// booting Start's goroutine. RawMux exposes the un-wrapped mux for
+// tests that need to bypass auth.
+func (s *Server) Handler() http.Handler { return s.publicHandler() }
+
+// RawMux returns the underlying mux without bearer middleware. Only
+// used by tests that need to bypass auth for readability; production
+// code paths go through publicHandler().
+func (s *Server) RawMux() http.Handler { return s.mux }
 
 // Shutdown triggers a graceful HTTP shutdown with a short timeout so
 // the worker can exit promptly on SIGTERM. It is safe to call

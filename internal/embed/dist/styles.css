@@ -1,293 +1,772 @@
-/* ClawMast walking-skeleton dashboard — Quiet Ops design language.
- * Matches design-system-v1.md (mobile-first, dark, single column,
- * 520 px max shell, 8 px base spacing, 12/16 px radius). The file is
- * intentionally inline-friendly; later iterations replace it with the
- * Vite + Tailwind v4 build output.
+/* ClawMast dashboard — legacy-matching design language.
+ *
+ * Ports the tokens + layout from clawmast-ts-backup/packages/web
+ * (Tailwind + lucide) into a framework-free stylesheet. Colors,
+ * typography and spacing intentionally match the previous Next.js
+ * build 1:1 so the mobile + desktop dashboards keep their look.
  */
+
+/* [hidden] attribute must beat any class-level display rule. The UA
+ * stylesheet declares [hidden] { display: none } with the same
+ * specificity as a class selector, so a later .oc-card { display: flex }
+ * would win and the element would leak on load. Authoritative here. */
+[hidden] { display: none !important; }
 
 :root {
   color-scheme: dark;
-  --bg: #0B1220;
-  --surface: #0F172A;
-  --surface-2: #111827;
-  --line: #1E293B;
-  --text: #F8FAFC;
-  --text-2: #CBD5E1;
-  --text-3: #94A3B8;
-  --primary: #2563EB;
-  --primary-hover: #1D4ED8;
-  --success: #16A34A;
-  --warning: #D97706;
-  --error: #DC2626;
+
+  --bg: #0a0c10;
+  --surface: #111318;
+  --surface-1: #111318;
+  --surface-2: #161b22;
+  --surface-3: #1c2028;
+  --border: #1e2128;
+  --border-2: #30363d;
+
+  --text: #e8eaed;
+  --text-muted: #8b949e;
+  --text-dim: #484f58;
+
+  --accent: #f59e0b;
+  --accent-hover: #fbbf24;
+  --accent-text: #000;
+  --accent-dim: rgba(245, 158, 11, 0.12);
+
+  --success: #22c55e;
+  --success-dim: rgba(34, 197, 94, 0.12);
+  --error: #ef4444;
+  --error-dim: rgba(239, 68, 68, 0.12);
+  --warning: #f59e0b;
+  --warning-dim: rgba(245, 158, 11, 0.12);
+  --info: #3b82f6;
+  --info-dim: rgba(59, 130, 246, 0.12);
+
   --radius-card: 16px;
   --radius: 12px;
-  --shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 10px 32px rgba(2, 6, 23, 0.45);
-  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  --radius-sm: 8px;
+
+  --font-sans: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, "JetBrains Mono", monospace;
 }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  background: radial-gradient(1200px 600px at 50% -10%, rgba(37, 99, 235, 0.08), transparent 60%), var(--bg);
+  background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 1.5;
   min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.shell {
-  max-width: 520px;
-  margin: 0 auto;
-  /* Respect iPhone home-bar / notch safe areas. The max() keeps the
-   * in-design 80 px floor when the device has no inset. */
-  padding:
-    max(32px, env(safe-area-inset-top))
-    20px
-    max(80px, env(safe-area-inset-bottom) + 24px);
-  display: flex; flex-direction: column; gap: 16px;
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ── Shell: desktop sidebar + main, mobile header + main ────────── */
+/* Match legacy Next.js <body class="min-h-dvh flex flex-col"> +
+   <AppShell className="min-h-dvh flex flex-col md:flex-row">. On
+   desktop the app is a two-column flex row so the sidebar stretches
+   to full viewport height (align-items: stretch is the default), and
+   the sidebar's own column-flex pushes its footer block to the bottom. */
+.app { min-height: 100dvh; display: flex; flex-direction: column; }
+@media (min-width: 768px) { .app { flex-direction: row; align-items: stretch; } }
+
+/* ── Sidebar (desktop only) ─────────────────────────────────────── */
+.sidebar { display: none; }
+@media (min-width: 768px) {
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 220px;
+    min-height: 100dvh;
+    position: sticky;
+    top: 0;
+    align-self: stretch;
+    max-height: 100dvh;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
 }
-
-.hero { text-align: center; padding: 16px 0 8px; }
-.hero .logo { color: var(--primary); display: inline-flex; padding: 12px; border-radius: 999px; background: rgba(37, 99, 235, 0.12); }
-.hero h1 { margin: 12px 0 4px; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
-.hero .tagline { margin: 0; color: var(--text-3); font-size: 14px; }
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  padding: 16px 18px;
-  box-shadow: var(--shadow);
+.sidebar-logo {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 20px;
+  height: 56px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600; font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.logo-mark {
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-text);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.sidebar-nav,
+.sidebar-nav-bottom {
+  display: flex; flex-direction: column; gap: 2px;
+}
+/* flex:1 + min-height:0 so the main nav expands and pushes the foot
+   block to the bottom of the sidebar, mirroring the Tailwind flex-1
+   on <nav> in clawmast-ts-backup/.../sidebar.tsx. */
+.sidebar-nav { flex: 1 1 0; min-height: 0; padding: 16px 12px; }
+.sidebar-nav-bottom { padding: 0 0 8px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 13px;
+  text-decoration: none;
+  transition: background 140ms ease, color 140ms ease;
+  cursor: pointer;
+}
+.nav-item svg { flex-shrink: 0; }
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 500; }
+/* margin-top:auto is a flexbox-idiomatic "pin to bottom" for columns —
+   guarantees the settings link + gateway badge are glued to the
+   sidebar's bottom edge even if .sidebar-nav's flex:1 cannot resolve
+   a growth distance (e.g. when sidebar height collapses in rare
+   overflow states). */
+.sidebar-foot {
+  margin-top: auto;
+  padding: 0 12px 16px;
   display: flex; flex-direction: column; gap: 12px;
 }
-
-.row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-/* .row.spaced is "label+hint on the left, action on the right". On
- * narrow viewports (~<=380 px) the descriptive hint can crowd the
- * action button; let them wrap and keep the button full-width as a
- * fallback row. The text column is allowed to grow; the button never
- * shrinks below its label. */
-.row.spaced { align-items: center; flex-wrap: wrap; row-gap: 10px; }
-.row.spaced > :first-child { flex: 1 1 220px; min-width: 0; }
-.row.spaced > .btn { flex: 0 0 auto; }
-.label { color: var(--text-3); font-size: 13px; }
-.hint { color: var(--text-3); font-size: 13px; margin-top: 2px; max-width: 34ch; }
-/* Mono cells tend to hold paths, git SHAs, and build times that exceed
- * a mobile viewport width. Break on any character rather than pushing
- * the whole card wider. */
-.mono { font-family: var(--font-mono); color: var(--text-2); font-size: 14px; overflow-wrap: anywhere; }
-.mono.small { font-size: 12px; color: var(--text-3); }
-
-.badge {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 500;
+.sidebar-status {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: var(--radius);
   background: var(--surface-2);
-  color: var(--text-2);
-  border: 1px solid var(--line);
 }
-.badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
-.badge-healthy { color: #BBF7D0; background: rgba(22, 163, 74, 0.12); border-color: rgba(22, 163, 74, 0.35); }
-.badge-healthy .dot { background: var(--success); box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.6); animation: pulse 1.8s ease-out infinite; }
-.badge-error   { color: #FECACA; background: rgba(220, 38, 38, 0.12); border-color: rgba(220, 38, 38, 0.35); }
-.badge-error .dot { background: var(--error); }
-.badge-unknown .dot { background: var(--text-3); }
+.sidebar-status .tiny {
+  font-size: 11px; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
 
-@keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.6); }
-  70%  { box-shadow: 0 0 0 8px rgba(22, 163, 74, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+/* ── Mobile bottom tab bar ──────────────────────────────────────── */
+.bottom-nav {
+  display: flex;
+  position: fixed; left: 0; right: 0; bottom: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 4px 0 calc(4px + env(safe-area-inset-bottom));
+  z-index: 50;
 }
+@media (min-width: 768px) { .bottom-nav { display: none; } }
+.bn-item {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 0;
+  font-size: 10px;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+.bn-item:hover { color: var(--text-muted); }
+.bn-item.active { color: var(--accent); }
+
+/* ── Client-side view switching ─────────────────────────────────── */
+.view { display: none; }
+.view.active { display: block; animation: fade-in 180ms ease-out; }
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Stub page (terminal/logs/settings placeholders) ────────────── */
+.stub {
+  text-align: center;
+  padding: 48px 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.stub-icon {
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-bottom: 6px;
+}
+.stub-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.stub-sub {
+  margin: 0;
+  max-width: 420px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.stub .link { margin-top: 8px; }
+
+/* ── Mobile header ──────────────────────────────────────────────── */
+.mobile-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  height: 48px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 50;
+}
+.mobile-header .logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+.mobile-header .logo-mark { width: 26px; height: 26px; border-radius: 7px; }
+@media (min-width: 768px) { .mobile-header { display: none; } }
+
+
+/* ── Main content ───────────────────────────────────────────────── */
+.content {
+  flex: 1;
+  padding: 16px;
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+@media (min-width: 768px) {
+  .content { padding: 20px 24px 20px; }
+}
+.content-inner {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+}
+@media (min-width: 768px) {
+  .content-inner { max-width: 960px; }
+}
+
+/* ── Object card (OpenClaw and future v0.2 siblings) ────────────
+   Each managed service owns one self-contained card: identity in
+   the header, metadata in the body, controls in the footer. Cards
+   compose vertically; adding a second object (ClawMast, etc.) does
+   not require redesigning the page. */
+.oc-card {
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  margin-bottom: 16px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.oc-card.tone-down { border-color: rgba(239, 68, 68, 0.3); }
+.oc-card.tone-warn { border-color: rgba(245, 158, 11, 0.35); }
+
+.oc-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.oc-icon {
+  flex-shrink: 0;
+  width: 40px; height: 40px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  transition: background 200ms ease, color 200ms ease;
+}
+.oc-card.tone-down .oc-icon { background: var(--error-dim); color: var(--error); }
+.oc-card.tone-warn .oc-icon { background: var(--warning-dim); color: var(--warning); }
+
+.oc-head-body { flex: 1; min-width: 0; }
+.oc-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+.oc-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── iOS About-style meta list ──────────────────────────────────
+   Flat rows, weak labels left, strong values right. Thin hairline
+   separators only (no row backgrounds / icons) so metadata reads
+   as information, not as a form. */
+.meta-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.meta-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  min-height: 36px;
+  border-bottom: 1px solid var(--border);
+}
+.meta-row:last-child { border-bottom: none; }
+.meta-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.meta-value {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+/* ── Structured health rows ─────────────────────────────────────
+   Each row on the OpenClaw card surfaces one verdict (service,
+   port, config, ...). The icon is a small square that carries the
+   tone via data-state; the text sits next to it in the same
+   monospace value column so the list still reads as "label →
+   value" even when the value is a glyph. */
+.health-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.health-icon {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  color: #000;
+  font-size: 10px; font-weight: 700; line-height: 1;
+}
+.health-icon[data-state="ok"]   { background: var(--ok, #2ea043); }
+.health-icon[data-state="err"]  { background: var(--err, #f85149); }
+.health-icon[data-state="warn"] { background: var(--warn, #d29922); }
+.health-icon[data-state="unknown"],
+.health-icon[data-state="off"]  { background: var(--border-2); }
+.health-icon[data-state="ok"]::before   { content: "\2713"; }
+.health-icon[data-state="err"]::before  { content: "\2715"; }
+.health-icon[data-state="warn"]::before { content: "!"; }
+.health-icon[data-state="off"]::before,
+.health-icon[data-state="unknown"]::before { content: "\2013"; color: var(--text-dim); }
+.health-text { color: var(--text); }
+.health-row[data-state="err"]  .health-text { color: var(--err, #f85149); }
+.health-row[data-state="warn"] .health-text { color: var(--warn, #d29922); }
+.health-row[data-state="off"]  .health-text { color: var(--text-muted); }
+
+.oc-card .banner { margin: 12px 16px 0; }
+
+.oc-foot {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-1) 60%, transparent);
+}
+
+/* ── iOS-style grouped info card ────────────────────────────────── */
+.group-card {
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.group-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.group-row:last-child { border-bottom: none; }
+.group-row .row-icon {
+  margin-top: 1px;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.group-row .row-icon.ic-accent  { color: var(--accent); }
+.group-row .row-icon.ic-info    { color: var(--info); }
+.group-row .row-icon.ic-success { color: var(--success); }
+.group-row .row-icon.ic-error   { color: var(--error); }
+.group-row .row-body { flex: 1; min-width: 0; }
+.group-row .row-main {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.group-row .row-label { font-size: 13px; color: var(--text); }
+.group-row .row-value {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  overflow-wrap: anywhere; text-align: right;
+}
+.group-row .row-value.dim      { color: var(--text-dim); }
+.group-row .row-value.ok       { color: var(--success); }
+.group-row .row-value.err      { color: var(--error); }
+.group-row .row-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+/* ── Banners (offline / info / danger) ──────────────────────────── */
+.banner {
+  border-radius: var(--radius-card);
+  padding: 12px 16px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.banner.error { background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); color: var(--error); }
+.banner.warn  { background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.2); color: var(--warning); }
+.banner.info  { background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); color: var(--info); }
+.banner pre {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* ── Badge (status pill) ────────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge-healthy { background: var(--success-dim); color: var(--success); }
+.badge-healthy .dot { animation: pulse-dot 2s ease-in-out infinite; }
+.badge-error   { background: var(--error-dim);   color: var(--error); }
+.badge-warn    { background: var(--warning-dim); color: var(--warning); }
+.badge-unknown { background: var(--surface-2); color: var(--text-dim); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 
 .btn {
   position: relative;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  padding: 10px 16px;
-  font: inherit; font-weight: 500;
-  cursor: pointer;
-  color: var(--text);
-  background: var(--surface-2);
-  transition: background 180ms ease-out, transform 120ms ease-out, border-color 180ms ease-out;
-  /* 44 px matches the Apple HIG / Material Design tap-target minimum;
-   * ghost buttons below are intentionally smaller for secondary use. */
-  min-height: 44px;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 14px;
+  min-height: 40px;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 80ms ease;
 }
-.btn:hover { background: #1A2236; }
-.btn:active { transform: translateY(1px); }
-.btn.primary { background: var(--primary); color: #F8FAFC; border-color: var(--primary); }
-.btn.primary:hover { background: var(--primary-hover); }
-.btn[disabled] { opacity: 0.6; cursor: wait; }
-.btn .btn-spinner { display: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.3); border-top-color: #fff; animation: spin 720ms linear infinite; }
-.btn[data-loading="1"] .btn-spinner { display: inline-block; }
-.btn[data-loading="1"] .btn-label { opacity: 0.7; }
+.btn:hover { background: var(--surface-2); color: var(--text); }
+.btn:active { transform: scale(0.98); }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.btn[data-loading="1"] { cursor: progress; }
+.btn[data-loading="1"] .btn-label { opacity: 0.75; }
+
+/* Primary: orange "fix" action (matches legacy one-click). */
+.btn.primary {
+  background: var(--accent-dim);
+  border-color: rgba(245, 158, 11, 0.25);
+  color: var(--accent);
+  font-size: 14px;
+  padding: 14px 20px;
+  min-height: 48px;
+  border-radius: 16px;
+  font-weight: 500;
+}
+.btn.primary:hover { background: rgba(245, 158, 11, 0.18); }
+
+/* Accent: green "install update" secondary action. */
+.btn.accent {
+  background: var(--success-dim);
+  border-color: rgba(34, 197, 94, 0.25);
+  color: var(--success);
+}
+.btn.accent:hover { background: rgba(34, 197, 94, 0.2); border-color: rgba(34, 197, 94, 0.45); }
+
+/* Danger: "mark current bad". */
+.btn.danger {
+  background: var(--error-dim);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: var(--error);
+}
+.btn.danger:hover { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.5); }
+
+/* Ghost: icon-only / compact. */
 .btn.ghost {
   background: transparent;
-  border-color: var(--line);
-  color: var(--text-3);
-  padding: 6px 8px;
+  border-color: transparent;
+  color: var(--text-muted);
+  padding: 6px 10px;
   min-height: 32px;
 }
-.btn.ghost:hover { color: var(--text); border-color: var(--text-3); background: var(--surface-2); }
-.btn.danger {
-  background: rgba(220, 38, 38, 0.12);
-  color: #FECACA;
-  border-color: rgba(220, 38, 38, 0.35);
-}
-.btn.danger:hover { background: rgba(220, 38, 38, 0.2); border-color: rgba(220, 38, 38, 0.6); color: #FFE4E6; }
-/* accent: the install-update action. Distinct from primary (check) so
- * the two sit side-by-side without reading as interchangeable. Uses
- * the success hue to signal "ready to move forward" after a check
- * flagged an available update. */
-.btn.accent {
-  background: rgba(22, 163, 74, 0.14);
-  color: #BBF7D0;
-  border-color: rgba(22, 163, 74, 0.38);
-}
-.btn.accent:hover { background: rgba(22, 163, 74, 0.22); border-color: rgba(22, 163, 74, 0.62); color: #DCFCE7; }
-/* Stack the two update buttons horizontally but let them wrap on
- * narrow viewports. */
-.btn-group { display: inline-flex; flex-wrap: wrap; gap: 8px; flex: 0 0 auto; }
-.row.spaced > .btn-group { flex: 0 0 auto; }
+.btn.ghost:hover { background: var(--surface-2); color: var(--text); }
 
+.btn .btn-spinner {
+  display: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 720ms linear infinite;
+}
+.btn[data-loading="1"] .btn-spinner { display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Timeline — supervisor ledger rendered as a vertical event log.
- * Each <li class="tl tl-<event>"> has a colored dot whose hue encodes
- * the event type (spawn=primary, crash=error, rollback=warning,
- * stop=muted), a short label, the version tag, and absolute+relative
- * timestamps on a second line. The rail is a thin gradient so that
- * long histories don't feel visually noisy.
- */
-/* The history hint carries a full file path; let it flow to the card's
- * width rather than clipping at the default 34ch. The same applies to
- * the blacklist card which describes the rollback semantics inline. */
-.history .hint,
-.blacklist .hint { max-width: none; }
-.history .hint.muted { color: var(--text-3); font-size: 12px; text-align: center; padding: 12px 0 4px; }
+.btn-group { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 
-.timeline {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0 0 0 14px;
-  position: relative;
+/* ── Cards (generic section, used by update/worker/history) ─────── */
+.card {
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  margin-bottom: 16px;
   display: flex; flex-direction: column; gap: 10px;
 }
-.timeline::before {
-  content: "";
-  position: absolute;
-  top: 6px; bottom: 6px; left: 5px;
-  width: 1px;
-  background: linear-gradient(to bottom, transparent, var(--line) 12%, var(--line) 88%, transparent);
+.card h3 {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
 }
-.tl {
-  position: relative;
-  display: flex; align-items: flex-start; gap: 12px;
-  padding-left: 4px;
+.card .sub { font-size: 12px; color: var(--text-muted); margin: 0; }
+.card .row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
-.tl-dot {
-  position: absolute;
-  left: -14px;
-  top: 6px;
-  width: 11px; height: 11px;
-  border-radius: 50%;
-  background: var(--text-3);
-  border: 2px solid var(--surface);
-  box-shadow: 0 0 0 1px var(--line);
+.card .row-stacked {
+  display: flex; flex-direction: column; gap: 2px;
+  flex: 1 1 220px; min-width: 0;
 }
-.tl-spawn    .tl-dot { background: var(--primary); box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.45); }
-.tl-crash    .tl-dot { background: var(--error);   box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.45); }
-.tl-rollback .tl-dot { background: var(--warning); box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.45); }
-.tl-stop     .tl-dot { background: var(--text-3);  box-shadow: 0 0 0 1px var(--line); }
+.card .row.spaced { flex-wrap: wrap; row-gap: 10px; }
+.card .row.spaced > :first-child { flex: 1 1 220px; min-width: 0; }
+.card .label { font-size: 12px; color: var(--text-muted); }
+.card .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.card .mono.small { font-size: 11px; color: var(--text-dim); }
 
-.tl-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.tl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.tl-head > .mono { overflow-wrap: anywhere; min-width: 0; }
-.tl-label { font-size: 13px; font-weight: 500; color: var(--text); }
-.tl-spawn    .tl-label { color: #BFDBFE; }
-.tl-crash    .tl-label { color: #FECACA; }
-.tl-rollback .tl-label { color: #FDE68A; }
-.tl-version { color: var(--text-2); }
-.tl-code { color: var(--text-3); }
-.tl-meta { color: var(--text-3); font-size: 12px; font-family: var(--font-mono); }
-.muted { color: var(--text-3); }
+/* Tone variants on .card (used for update-card outcome). */
+.card.tone-ok     { border-color: rgba(34, 197, 94, 0.35); }
+.card.tone-warn   { border-color: rgba(245, 158, 11, 0.4); }
+.card.tone-danger { border-color: rgba(239, 68, 68, 0.5); box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.2); }
+.card.tone-muted  { border-color: var(--border); }
+.update-result { display: flex; flex-direction: column; gap: 4px; }
+.card.tone-ok     #update-result-text { color: var(--success); }
+.card.tone-warn   #update-result-text { color: var(--warning); }
+.card.tone-danger #update-result-text { color: #fca5a5; font-weight: 600; }
+.card.tone-muted  #update-result-text { color: var(--text-muted); }
+
+.card.openclaw-card.tone-down  { border-color: rgba(239, 68, 68, 0.3); }
+.card.openclaw-card.tone-warn  { border-color: rgba(245, 158, 11, 0.35); }
+
+.hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0; }
+.hint.muted { color: var(--text-dim); }
+.muted { color: var(--text-muted); }
 .small { font-size: 12px; }
 
-/* Blacklist card — list of versions the supervisor must refuse to spawn.
- * Each entry shows the version tag (highlighted when it is the running
- * one), the timestamp and the reason on a second muted line.
- */
-.blacklist-list {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-  display: flex; flex-direction: column; gap: 8px;
-}
-.bl-item {
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  display: flex; flex-direction: column; gap: 2px;
-}
-.bl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.bl-version { color: #FECACA; }
-.bl-tag {
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: rgba(220, 38, 38, 0.18);
-  color: #FECACA;
-  border: 1px solid rgba(220, 38, 38, 0.45);
-}
-.bl-meta { color: var(--text-3); }
 
-.foot {
-  margin-top: 8px;
-  display: flex; justify-content: center; align-items: center; gap: 8px;
-  color: var(--text-3);
+/* ── Action grid (secondary buttons under 一键修复) ─────────────── */
+/* Matches the legacy <ActionGrid /> secondary row: 2-up on mobile,
+   flex-wrap on desktop so buttons stay at a comfortable hit target. */
+/* Flex-wrap (not grid) because the visible count changes with gateway
+ * state — online shows 3 (restart/stop/doctor), offline shows 2
+ * (start/doctor). A fixed-column grid leaves ugly holes; flex+flex:1
+ * makes whatever is visible share the row evenly. */
+.action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.action-grid .btn {
+  flex: 1 1 140px;
+  min-height: 40px;
+  font-size: 13px;
+}
+
+/* ── In-flow console panel ───────────────────────────────────────
+   Sits right below the OpenClaw card in normal document flow — not
+   a fixed overlay — so it never steals a sliver of the viewport and
+   never fights the sidebar / mobile bottom nav for z-index. Three
+   states tracked via data-state:
+     collapsed — thin 36px status bar, log region display:none
+     expanded  — user-opened drawer, log visible (240px max, scroll)
+     running   — auto-expanded variant during in-flight actions
+   Always present in the DOM — an idle empty console is fine; the
+   header text ("控制台 · 等待操作") keeps it from reading as noise. */
+.console {
+  margin-top: 16px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.console-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  height: 36px;
+  cursor: pointer;
+  user-select: none;
+}
+.console-status { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+.console-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-dim);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.console[data-state="running"] .console-dot { background: var(--accent); animation: pulse-dot 1.4s ease-in-out infinite; }
+.console[data-state="running"] .console-label { color: var(--accent); }
+.console.outcome-ok  .console-dot { background: var(--success); }
+.console.outcome-ok  .console-label { color: var(--success); }
+.console.outcome-err .console-dot { background: var(--error); }
+.console.outcome-err .console-label { color: var(--error); }
+.console-spacer { flex: 1; }
+.console-btn { padding: 4px 8px; min-height: 28px; }
+.console-chev { transition: transform 160ms ease; }
+.console[data-state="collapsed"] .console-chev { transform: rotate(180deg); }
+/* Hide Clear button when there's nothing to clear — keeps the idle
+   bar visually quiet. We toggle a class from JS when the log has
+   content; fall back to always-on if that class is missing. */
+.console[data-state="collapsed"]:not(.has-log) #console-clear { display: none; }
+
+.console-log {
+  margin: 0;
+  padding: 12px 16px 16px;
+  font-family: var(--font-mono);
   font-size: 12px;
-  /* Footer holds `commit, build_time, go_version` — definitely wider
-   * than a phone viewport. Allow the whole footer to wrap and let the
-   * build string itself break on any character. */
-  flex-wrap: wrap; text-align: center;
+  line-height: 1.55;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
 }
-.foot .sep { color: var(--line); }
-.foot .mono { max-width: 100%; overflow-wrap: anywhere; }
-.link { color: var(--text-2); text-decoration: none; border-bottom: 1px dotted var(--line); }
-.link:hover { color: var(--primary); border-color: var(--primary); }
+.console[data-state="collapsed"] .console-log { display: none; }
+.console-log .ln-err { color: #fca5a5; }
+.console-log .ln-sys { color: var(--text-dim); font-style: italic; }
 
-/* Very narrow viewports (iPhone SE 1st gen, folded phones). Trim the
- * horizontal gutter and tighten card padding so content reads without
- * horizontal pressure. */
-@media (max-width: 360px) {
-  .shell { padding-left: 14px; padding-right: 14px; }
-  .card  { padding: 14px; }
-  .hero h1 { font-size: 26px; }
+/* ── Sidebar nav dot (ClawMast update notice) ───────────────────── */
+.nav-item { position: relative; }
+.nav-dot {
+  position: absolute;
+  top: 10px; right: 10px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
 }
 
-@media (min-width: 640px) {
-  .shell { padding-top: 64px; }
-  .hero h1 { font-size: 34px; }
+/* ── Settings view ──────────────────────────────────────────────── */
+.settings-head { margin: 4px 0 18px; }
+.settings-title {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
+.settings-sub { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.55; }
+.settings-hint { margin: 12px 4px 0; font-size: 11px; }
+.group-actions { justify-content: flex-end; }
+.group-actions .btn-group { margin-left: auto; flex-wrap: wrap; }
 
-/* Update-card tones encode the severity of the last /api/updates/check
- * result. Applied by the JS via tone-{ok,warn,danger,muted} — the
- * headline colour shifts while the rest of the card layout stays put.
- * tone-danger in particular exists because a bad-signature result must
- * be visually impossible to miss: do not install an unsigned binary. */
-.update .update-result { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
-.update.tone-ok       #update-result-text { color: var(--success); }
-.update.tone-warn     #update-result-text { color: var(--warning); }
-.update.tone-danger   #update-result-text { color: #FCA5A5; font-weight: 600; }
-.update.tone-muted    #update-result-text { color: var(--text-3); }
-.update.tone-danger {
-  border-color: rgba(220, 38, 38, 0.5);
-  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.25);
+/* iOS-style toggle switch (UI-only placeholder in v0.1). */
+.switch { position: relative; display: inline-block; width: 44px; height: 26px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch-slider {
+  position: absolute; inset: 0;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transition: background 160ms ease, border-color 160ms ease;
+  cursor: pointer;
 }
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 160ms ease;
+}
+.switch input:checked + .switch-slider {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch input:checked + .switch-slider::before { transform: translateX(18px); background: #000; }
+.switch input:disabled + .switch-slider { opacity: 0.55; cursor: not-allowed; }
+
+/* ── Modal (token dialog) ──────────────────────────────────────── */
+.modal {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  color: var(--text);
+  padding: 0;
+  max-width: 480px;
+  width: calc(100% - 32px);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6);
+}
+.modal::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.modal-body h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.modal-body .hint { max-width: none; }
+.modal-body label { font-size: 12px; color: var(--text-muted); }
+.modal-body input[type="password"] {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.modal-body input[type="password"]:focus { outline: none; border-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ── Footer ────────────────────────────────────────────────────── */
+.foot {
+  margin-top: 24px;
+  display: flex; justify-content: center; align-items: center;
+  gap: 8px; flex-wrap: wrap;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.foot .sep { color: var(--border-2); }
+.foot .mono { max-width: 100%; overflow-wrap: anywhere; font-family: var(--font-mono); }
+.link {
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--border-2);
+}
+.link:hover { color: var(--accent); border-color: var(--accent); }
+

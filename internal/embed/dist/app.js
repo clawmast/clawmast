@@ -1,8 +1,8 @@
 // ClawMast walking-skeleton dashboard client.
 //
-// No framework, no build step — deliberately. The page has one status
-// card and one "check for updates" button, so the JS only needs to
-// fetch three endpoints and render five fields.
+// No framework, no build step — deliberately. The dashboard focuses on
+// OpenClaw status + one-click actions; ClawMast's own version/update
+// UI lives under Settings.
 //
 // Later iterations replace this file with a React + Vite bundle; the
 // embed FS shape stays the same (architecture/refactor.md §9).
@@ -10,40 +10,130 @@
 (() => {
   const $ = (id) => document.getElementById(id);
 
-  const versionEl = $("version");
-  const buildEl = $("build");
-  const uptimeEl = $("uptime");
-  const fullEl = $("footer-full");
-  const statusBadge = $("status-badge");
+  // Dashboard — status + footer.
   const statusText = $("status-text");
-  const checkBtn = $("check-updates");
-  const installBtn = $("install-update");
-  const updateCard = $("update-card");
-  const updateResult = $("update-result");
-  const updateResultText = $("update-result-text");
-  const updateResultMeta = $("update-result-meta");
-  const updateChannelEl = $("update-channel");
-  const updateNote = $("update-note");
-  const historyCard = $("history-card");
-  const historyList = $("history-list");
-  const historyEmpty = $("history-empty");
-  const historyHint = $("history-hint");
-  const historyRefreshBtn = $("history-refresh");
-  const blacklistCard = $("blacklist-card");
-  const blacklistList = $("blacklist-list");
-  const blacklistEmpty = $("blacklist-empty");
-  const blacklistResult = $("blacklist-result");
-  const markBadBtn = $("mark-bad");
+  const footerVersion = $("footer-version");
+  const footerUptime = $("footer-uptime");
 
-  let currentVersion = null;
+  // OpenClaw card.
+  const openclawCard = $("openclaw-card");
+  const openclawSub = $("openclaw-sub");
+  const openclawBadge = $("openclaw-badge");
+  const openclawBadgeText = $("openclaw-badge-text");
+  const openclawChannelsRow = $("openclaw-channels-row");
+  const openclawChannels = $("openclaw-channels");
+  const openclawAgentRow = $("openclaw-agent-row");
+  const openclawAgent = $("openclaw-agent");
+  const openclawProbed = $("openclaw-probed");
+  // Structured health rows. Each row carries one signal; the card
+  // composes them into the overall 运行中 / 异常 / 已停止 verdict
+  // via the badge + button set.
+  const openclawRowService = $("openclaw-row-service");
+  const openclawServiceText = $("openclaw-service-text");
+  const openclawRowPort = $("openclaw-row-port");
+  const openclawPortText = $("openclaw-port-text");
+
+  // Destructive-action confirmation dialog.
+  const confirmDialog = $("confirm-dialog");
+  const confirmForm = $("confirm-form");
+  const confirmTitle = $("confirm-title");
+  const confirmBody = $("confirm-body");
+  const confirmCancel = $("confirm-cancel");
+
+  // Persistent bottom console. Shared by every action + fix stream.
+  // The status label + outcome dot live in the always-visible head;
+  // the log itself only takes space in expanded / running states.
+  const consoleEl = $("console");
+  const consoleHead = $("console-head");
+  const consoleLabel = $("console-label");
+  const consoleLog = $("console-log");
+  const consoleToggle = $("console-toggle");
+  const consoleClear = $("console-clear");
+
+  // Token prompt (legacy dialog — unchanged).
+  const tokenDialog = $("token-dialog");
+  const tokenForm = $("token-form");
+  const tokenInput = $("token-input");
+  const tokenError = $("token-error");
+
+  // Settings view.
+  const settingsVersion = $("settings-version");
+  const settingsBuild = $("settings-build");
+  const settingsFull = $("settings-full");
+  const settingsChannel = $("settings-channel");
+  const settingsLatest = $("settings-latest");
+  const settingsUpdateNote = $("settings-update-note");
+  const settingsCheck = $("settings-check");
+  const settingsInstall = $("settings-install");
+  const settingsUpdateDot = $("settings-update-dot");
 
   const rtf = new Intl.RelativeTimeFormat("zh-Hans", { numeric: "auto" });
   const tfmt = new Intl.DateTimeFormat("zh-Hans", {
     hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   });
 
+  // --- bearer token plumbing --------------------------------------------
+  //
+  // The worker enforces Authorization: Bearer on every /api/** except
+  // /api/health when the connection is non-loopback. We keep the token
+  // in localStorage so reloads on the same device don't re-prompt; any
+  // 401 triggers a modal and retries the original request once.
+  const TOKEN_KEY = "clawmast:bearer";
+  const getToken = () => {
+    try { return window.localStorage.getItem(TOKEN_KEY) || ""; }
+    catch { return ""; }
+  };
+  const setToken = (v) => {
+    try { window.localStorage.setItem(TOKEN_KEY, v); }
+    catch { /* private mode: keep in-memory only */ }
+  };
+  const clearToken = () => {
+    try { window.localStorage.removeItem(TOKEN_KEY); } catch {}
+  };
+
+  function withAuth(init) {
+    const headers = new Headers(init && init.headers ? init.headers : undefined);
+    const t = getToken();
+    if (t) headers.set("Authorization", `Bearer ${t}`);
+    return { ...(init || {}), headers };
+  }
+
+  // promptForToken shows the modal and resolves with true when the user
+  // saves a new token, or false when they cancel. Only one modal is open
+  // at a time; concurrent 401s await the same promise.
+  let tokenPromise = null;
+  function promptForToken(reason) {
+    if (tokenPromise) return tokenPromise;
+    tokenError.hidden = !reason;
+    tokenError.textContent = reason || "";
+    tokenInput.value = "";
+    if (typeof tokenDialog.showModal === "function") tokenDialog.showModal();
+    else tokenDialog.setAttribute("open", "");
+    tokenPromise = new Promise((resolve) => {
+      const onSubmit = (ev) => {
+        ev.preventDefault();
+        const v = (tokenInput.value || "").trim();
+        if (!v) return;
+        setToken(v);
+        tokenForm.removeEventListener("submit", onSubmit);
+        if (typeof tokenDialog.close === "function") tokenDialog.close();
+        else tokenDialog.removeAttribute("open");
+        tokenPromise = null;
+        resolve(true);
+      };
+      tokenForm.addEventListener("submit", onSubmit);
+    });
+    return tokenPromise;
+  }
+
   async function jfetch(url, init) {
-    const res = await fetch(url, init);
+    let res = await fetch(url, withAuth(init));
+    if (res.status === 401) {
+      clearToken();
+      const entered = await promptForToken("服务端拒绝,当前 token 无效或已更换。");
+      if (!entered) throw new Error("401 unauthorized");
+      res = await fetch(url, withAuth(init));
+    }
     if (!res.ok) {
       throw new Error(`${res.status} ${res.statusText}`);
     }
@@ -60,25 +150,43 @@
     return `${h} 时 ${m % 60} 分`;
   }
 
+  // setStatus updates both the desktop sidebar badge and the mobile
+  // header mirror in one pass. The legacy dashboard showed the same
+  // pill in two layout slots (sidebar + top bar); we preserve that
+  // by mirroring via the data-mirror attribute on the mobile node.
   function setStatus(kind, text) {
-    statusBadge.classList.remove("badge-unknown", "badge-healthy", "badge-error");
-    statusBadge.classList.add(`badge-${kind}`);
+    const badges = document.querySelectorAll('#status-badge, #status-badge-mobile');
+    badges.forEach((el) => {
+      el.classList.remove("badge-unknown", "badge-healthy", "badge-error");
+      el.classList.add(`badge-${kind}`);
+    });
     statusText.textContent = text;
+    document.querySelectorAll('[data-mirror="status-text"]').forEach((el) => {
+      el.textContent = text;
+    });
+  }
+
+  // setOpenclawSub writes the one-line subtitle under the object
+  // title in the card header. Keeps the status story in a single
+  // spot — the badge carries the tone; the sub carries the detail.
+  function setOpenclawSub(text) {
+    openclawSub.textContent = text || "";
   }
 
   async function loadVersion() {
     try {
       const v = await jfetch("/api/version");
-      // Prefer the supervisor-assigned label (matches what the
-      // installer and blacklist use); fall back to the ldflags
+      // Prefer the supervisor-assigned label; fall back to the ldflags
       // version in standalone mode.
-      currentVersion = v.label || v.version || "";
-      versionEl.textContent = currentVersion || "dev";
-      buildEl.textContent = `${v.commit || "none"} · ${v.build_time || "unknown"}`;
-      fullEl.textContent = v.full || "";
+      const label = v.label || v.version || "dev";
+      footerVersion.textContent = label;
+      settingsVersion.textContent = label;
+      settingsBuild.textContent = `${v.commit || "none"} · ${v.build_time || "unknown"}`;
+      settingsFull.textContent = v.full || "";
     } catch (err) {
-      versionEl.textContent = "加载失败";
-      buildEl.textContent = String(err.message || err);
+      footerVersion.textContent = "加载失败";
+      settingsVersion.textContent = "加载失败";
+      settingsBuild.textContent = String(err.message || err);
     }
   }
 
@@ -86,353 +194,583 @@
     try {
       const h = await jfetch("/api/health");
       setStatus(h.ok ? "healthy" : "error", h.ok ? "运行中" : "异常");
-      uptimeEl.textContent = fmtUptime(h.uptime_ms);
+      footerUptime.textContent = `uptime ${fmtUptime(h.uptime_ms)}`;
     } catch (err) {
       setStatus("error", "无法连接");
-      uptimeEl.textContent = "—";
+      footerUptime.textContent = "—";
     }
   }
 
-  // Copy tables for /api/updates/check outcomes. Keyed on the "source"
-  // field so we render the right headline without string-matching the
-  // note. "error" disambiguates via error_code.
-  const UPDATE_SOURCE_COPY = {
-    "signed-manifest": { tone: "ok" },
-    "not-configured":  { tone: "muted", headline: "未配置更新通道" },
-  };
-  const UPDATE_ERROR_COPY = {
-    "bad-signature":    { tone: "danger", headline: "签名验证失败 — 切勿安装" },
-    "channel-mismatch": { tone: "warn",   headline: "通道不一致" },
-    "manifest-missing": { tone: "warn",   headline: "通道未发布 manifest" },
-    "manifest-too-big": { tone: "warn",   headline: "manifest 超出体积上限" },
-    "bad-url":          { tone: "warn",   headline: "更新通道 URL 无效" },
-    "unreachable":      { tone: "warn",   headline: "无法连接更新通道" },
-  };
+  // --- openclaw status card --------------------------------------------
 
-  function applyUpdateTone(tone) {
-    updateCard.classList.remove("tone-ok", "tone-warn", "tone-danger", "tone-muted");
-    if (tone) updateCard.classList.add(`tone-${tone}`);
+  function fmtRelative(d) {
+    const delta = (d.getTime() - Date.now()) / 1000;
+    const abs = Math.abs(delta);
+    if (abs < 60)    return rtf.format(Math.round(delta), "second");
+    if (abs < 3600)  return rtf.format(Math.round(delta / 60), "minute");
+    if (abs < 86400) return rtf.format(Math.round(delta / 3600), "hour");
+    return rtf.format(Math.round(delta / 86400), "day");
   }
 
-  async function checkUpdates() {
-    checkBtn.dataset.loading = "1";
-    checkBtn.disabled = true;
+  function relStamp(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return `${tfmt.format(d)} · ${fmtRelative(d)}`;
+  }
+
+  function setOpenclawTone(tone) {
+    openclawCard.classList.remove("tone-down", "tone-warn");
+    if (tone) openclawCard.classList.add(`tone-${tone}`);
+  }
+
+  function setOpenclawBadge(kind, text) {
+    openclawBadge.classList.remove("badge-unknown", "badge-healthy", "badge-error");
+    openclawBadge.classList.add(`badge-${kind}`);
+    openclawBadgeText.textContent = text;
+  }
+
+  // Drive the action grid off the probed state. Every button is
+  // always visible so the layout is stable across state changes; only
+  // the disabled flag toggles. This also self-documents — a greyed-
+  // out 重启 in the 已停止 state tells the operator "restart doesn't
+  // apply here" without them having to remember which buttons belong
+  // to which state.
+  //
+  //                   一键修复   启动   停止   重启
+  //   运行中            ✓         ·     ✓      ✓
+  //   异常 (offline)    ✓         ✓     ✓      ·
+  //   已停止             ✓         ✓     ·      ·
+  //   未安装 / 检测中     ·         ·     ·      ·
+  //
+  // 一键修复 is state-independent because it repairs config / service
+  // / env — useful regardless of live state. 启动/停止/重启 are
+  // state-dependent: each only enables when its target transition
+  // makes sense.
+  //
+  // runAction() disables every button for the duration of a request
+  // and calls pollOpenClaw() at the end, which re-enters this
+  // function to restore the right set.
+  function setActionState(mode) {
+    const btns = {
+      fix:     document.querySelector('[data-action="fix"]'),
+      start:   document.querySelector('[data-action="start"]'),
+      stop:    document.querySelector('[data-action="stop"]'),
+      restart: document.querySelector('[data-action="restart"]'),
+    };
+    // Always visible — only disabled state changes.
+    for (const b of Object.values(btns)) b.hidden = false;
+    if (mode === "online") {
+      btns.fix.disabled = false;
+      btns.start.disabled = true;
+      btns.restart.disabled = false;
+      btns.stop.disabled = false;
+    } else if (mode === "offline") {
+      btns.fix.disabled = false;
+      btns.start.disabled = false;
+      btns.restart.disabled = true;
+      btns.stop.disabled = false;
+    } else if (mode === "stopped") {
+      btns.fix.disabled = false;
+      btns.start.disabled = false;
+      btns.restart.disabled = true;
+      btns.stop.disabled = true;
+    } else { // "unknown" or "missing"
+      btns.fix.disabled = true;
+      btns.start.disabled = true;
+      btns.restart.disabled = true;
+      btns.stop.disabled = true;
+    }
+  }
+
+  // setHealthRow writes a row's icon state ("ok"/"err"/"warn"/"off"/
+  // "unknown") + text in one call. The row element also carries the
+  // state via data-state so CSS can tint the text.
+  function setHealthRow(row, textEl, state, text) {
+    if (!row || !textEl) return;
+    row.dataset.state = state;
+    const icon = row.querySelector(".health-icon");
+    if (icon) icon.dataset.state = state;
+    textEl.textContent = text;
+  }
+
+  // shortErr condenses a probe_error (which may include a stacktrace
+  // or long CLI help output) to a single-line hint suitable for the
+  // port row. We don't try to parse openclaw's prose — just pick the
+  // first non-empty line and cap its width.
+  function shortErr(raw) {
+    if (!raw) return "";
+    const first = String(raw).split(/\r?\n/).find((l) => l.trim()) || "";
+    const trimmed = first.trim();
+    return trimmed.length > 80 ? trimmed.slice(0, 77) + "…" : trimmed;
+  }
+
+  function renderOpenClaw(s) {
+    if (!s.probed) {
+      setOpenclawBadge("unknown", "检测中");
+      setActionState("unknown");
+      setOpenclawTone(null);
+      setOpenclawSub("连接本机 openclaw CLI 并探测网关状态");
+      setHealthRow(openclawRowService, openclawServiceText, "unknown", "检测中");
+      setHealthRow(openclawRowPort, openclawPortText, "unknown", "—");
+      return;
+    }
+    if (s.cli_missing) {
+      setOpenclawBadge("error", "未安装");
+      setActionState("missing");
+      setOpenclawTone("down");
+      openclawChannelsRow.hidden = true;
+      openclawAgentRow.hidden = true;
+      openclawProbed.textContent = s.last_probe_at ? relStamp(s.last_probe_at) : "—";
+      setOpenclawSub("未安装 openclaw CLI · 请按官方文档完成安装");
+      setHealthRow(openclawRowService, openclawServiceText, "err", "openclaw CLI 未安装");
+      setHealthRow(openclawRowPort, openclawPortText, "off", "—");
+      return;
+    }
+
+    // Service row — we always know the CLI is available here (the
+    // cli_missing branch returned). Without a live service-status
+    // probe we can only assert "CLI 就绪"; the port row carries the
+    // runtime verdict.
+    setHealthRow(openclawRowService, openclawServiceText, "ok", "openclaw CLI 就绪");
+
+    // Intent takes precedence over alive. After a stop click the
+    // probe may briefly still see alive=true (service tearing down,
+    // port still bound) — trusting that would flap the badge back to
+    // 运行中 until the next 3s tick. Intent = stopped means the user
+    // asked for it; render 已停止 and let the poller reconcile. The
+    // reverse is also true for running intent: if the user just
+    // clicked start/restart/fix, trust the observed alive (running
+    // intent + alive=false = 异常, which is the point).
+    if (s.intent === "stopped") {
+      setOpenclawBadge("unknown", "已停止");
+      setActionState("stopped");
+      setOpenclawTone(null);
+      setOpenclawSub("已手动停止 · 点击启动重新拉起");
+      setHealthRow(openclawRowPort, openclawPortText, "off", ":18789 已停止");
+    } else if (s.alive) {
+      setOpenclawBadge("healthy", "运行中");
+      setActionState("online");
+      setOpenclawTone(null);
+      const bits = [];
+      bits.push(s.version ? `v${s.version}` : "OpenClaw");
+      bits.push("127.0.0.1:18789");
+      setOpenclawSub(bits.join(" · "));
+      setHealthRow(openclawRowPort, openclawPortText, "ok", ":18789 health 正常");
+    } else {
+      // !alive with no explicit "stopped" intent = abnormal. Either it
+      // crashed or it never came up; either way the operator should
+      // run 一键修复 or fall back to 启动.
+      setOpenclawBadge("error", "异常");
+      setActionState("offline");
+      setOpenclawTone("down");
+      setOpenclawSub("点击一键修复,或使用启动按钮手动拉起");
+      const reason = shortErr(s.probe_error) || "gateway 未响应";
+      setHealthRow(openclawRowPort, openclawPortText, "err", `:18789 ${reason}`);
+    }
+    lastSessionsCount = s.sessions_count || 0;
+    openclawChannelsRow.hidden = !(s.channel_count || s.sessions_count);
+    openclawChannels.textContent = `${s.channel_count || 0} 个 · ${s.sessions_count || 0} 会话`;
+    openclawAgentRow.hidden = !s.default_agent_id;
+    openclawAgent.textContent = s.default_agent_id || "—";
+    const probeMS = s.last_probe_ms ? ` (${s.last_probe_ms} ms)` : "";
+    openclawProbed.textContent = s.last_probe_at
+      ? `${relStamp(s.last_probe_at)}${probeMS}`
+      : "—";
+  }
+
+  async function pollOpenClaw() {
+    try {
+      const res = await fetch("/api/openclaw/status", withAuth());
+      if (res.status === 503) { openclawCard.hidden = true; return; }
+      if (res.status === 401) {
+        await promptForToken("需要 bearer token 才能读取 openclaw 状态。");
+        return;
+      }
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const s = await res.json();
+      renderOpenClaw(s);
+    } catch (err) {
+      setOpenclawBadge("error", "无法连接");
+      setActionState("unknown");
+      setOpenclawTone("down");
+      setOpenclawSub(`探测失败:${err.message || err}`);
+    }
+  }
+
+  // --- action + bottom console ---------------------------------------
+  //
+  // The four small action buttons (start/stop/restart/doctor) and the
+  // orange 一键修复 button all funnel through runAction(). Fix hits
+  // /api/openclaw/fix which streams a multi-step cascade; the others hit
+  // /api/openclaw/action?name=… which emits exactly one start+end pair.
+  // Both flows feed the persistent bottom console (#console) so the
+  // dashboard layout never shifts when output arrives.
+
+  const ACTION_LABELS = {
+    fix: "一键修复", start: "启动", stop: "停止", restart: "重启",
+  };
+
+  // Actions that interrupt active sessions prompt first. The copy
+  // adapts to the current sessions_count so "1 个会话" vs "当前没有
+  // 活跃会话" reads naturally.
+  const CONFIRM_COPY = {
+    fix: {
+      title: "运行一键修复?",
+      body: "一键修复会依次检查环境、重装服务、重启 gateway,最长约 30 秒。",
+    },
+    restart: {
+      title: "重启 OpenClaw Gateway?",
+      body: "重启会关闭并重新拉起 gateway,大约持续 5 秒。",
+    },
+  };
+
+  // confirmAction shows the reusable modal and resolves true if the
+  // user hit 继续, false otherwise (cancel / dismiss / Esc). Only one
+  // dialog is open at a time — the browser enforces this on <dialog>.
+  function confirmAction(name, sessionsCount) {
+    const copy = CONFIRM_COPY[name];
+    if (!copy) return Promise.resolve(true);
+    confirmTitle.textContent = copy.title;
+    const sess = Number.isFinite(sessionsCount) && sessionsCount > 0
+      ? `当前 ${sessionsCount} 个活跃会话会被中断。`
+      : "当前没有活跃会话,可以安全继续。";
+    confirmBody.textContent = `${copy.body} ${sess}`;
+    return new Promise((resolve) => {
+      const onSubmit = (ev) => {
+        ev.preventDefault();
+        cleanup();
+        confirmDialog.close();
+        resolve(true);
+      };
+      const onCancel = () => { cleanup(); confirmDialog.close(); resolve(false); };
+      const onEsc = (ev) => {
+        // <dialog> fires a 'cancel' event on Esc; listen on the
+        // dialog itself rather than the form so dismissal works even
+        // without a button click.
+        ev.preventDefault();
+        cleanup();
+        confirmDialog.close();
+        resolve(false);
+      };
+      function cleanup() {
+        confirmForm.removeEventListener("submit", onSubmit);
+        confirmCancel.removeEventListener("click", onCancel);
+        confirmDialog.removeEventListener("cancel", onEsc);
+      }
+      confirmForm.addEventListener("submit", onSubmit);
+      confirmCancel.addEventListener("click", onCancel);
+      confirmDialog.addEventListener("cancel", onEsc);
+      if (typeof confirmDialog.showModal === "function") confirmDialog.showModal();
+      else confirmDialog.setAttribute("open", "");
+    });
+  }
+
+  // Console has three states: collapsed (thin bar), expanded (user
+  // opened), running (auto-expanded during an in-flight action). The
+  // last-outcome class survives across state changes so the dot keeps
+  // its green/red tint after the action finishes.
+  function setConsoleState(state) {
+    consoleEl.dataset.state = state;
+  }
+  function setConsoleLabel(text) {
+    consoleLabel.textContent = text || "控制台 · 等待操作";
+  }
+  function setConsoleOutcome(outcome) {
+    consoleEl.classList.remove("outcome-ok", "outcome-err");
+    if (outcome === "ok") consoleEl.classList.add("outcome-ok");
+    else if (outcome) consoleEl.classList.add("outcome-err");
+  }
+  // has-log toggles the Clear button and any other "there is content"
+  // affordances so the idle console stays visually quiet.
+  function setConsoleHasLog(has) {
+    consoleEl.classList.toggle("has-log", !!has);
+  }
+
+  function appendConsoleLine(text, kind) {
+    if (!text) return;
+    const span = document.createElement("span");
+    span.className = kind ? `ln-${kind}` : "";
+    span.textContent = text.endsWith("\n") ? text : text + "\n";
+    consoleLog.appendChild(span);
+    consoleLog.scrollTop = consoleLog.scrollHeight;
+    setConsoleHasLog(true);
+  }
+
+  function applyStreamEvent(ev) {
+    if (ev.phase === "start") {
+      if (ev.command) appendConsoleLine(`$ ${ev.command}`, "sys");
+      return;
+    }
+    // end phase: append stdout/stderr tails then a summary line.
+    if (ev.stdout_tail) appendConsoleLine(ev.stdout_tail);
+    if (ev.stderr_tail) appendConsoleLine(ev.stderr_tail, "err");
+    if (ev.note) appendConsoleLine(ev.note, "err");
+    const outcome = ev.outcome || "failed";
+    const ms = ev.duration_ms ? ` · ${ev.duration_ms} ms` : "";
+    const code = (typeof ev.exit_code === "number" && ev.exit_code !== 0)
+      ? ` · exit=${ev.exit_code}` : "";
+    appendConsoleLine(`[${outcome}${ms}${code}]`, "sys");
+  }
+
+  // Header is the toggle surface; buttons inside stop propagation so
+  // clicking Clear / chevron doesn't double-fire. We avoid toggling
+  // while an action is running — the running drawer stays up until
+  // the request settles so users don't lose output mid-stream.
+  consoleHead.addEventListener("click", (ev) => {
+    if (ev.target.closest(".console-btn")) return;
+    if (consoleEl.dataset.state === "running") return;
+    setConsoleState(consoleEl.dataset.state === "collapsed" ? "expanded" : "collapsed");
+  });
+  consoleToggle.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (consoleEl.dataset.state === "running") return;
+    setConsoleState(consoleEl.dataset.state === "collapsed" ? "expanded" : "collapsed");
+  });
+  consoleClear.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    consoleLog.replaceChildren();
+    setConsoleOutcome(null);
+    setConsoleLabel("控制台 · 等待操作");
+    setConsoleHasLog(false);
+    setConsoleState("collapsed");
+  });
+
+  // Buttons are indexed once at boot; we toggle their disabled state from
+  // renderOpenClaw() rather than binding+rebinding click handlers.
+  const actionButtons = Array.from(document.querySelectorAll('[data-action]'));
+  for (const btn of actionButtons) {
+    btn.addEventListener("click", () => runAction(btn.dataset.action));
+  }
+
+  // Track the last rendered sessions_count so confirm copy reflects
+  // the freshest known state without a synchronous probe at click time.
+  let lastSessionsCount = 0;
+
+  async function runAction(name) {
+    if (!ACTION_LABELS[name]) return;
+    const btn = document.querySelector(`[data-action="${name}"]`);
+    if (!btn || btn.disabled) return;
+
+    // Destructive actions get a single confirmation prompt. We ask
+    // before painting the running state so a cancel leaves the UI
+    // untouched.
+    if (CONFIRM_COPY[name]) {
+      const ok = await confirmAction(name, lastSessionsCount);
+      if (!ok) return;
+    }
+
+    // Expand the in-flow console for the duration of the action. The
+    // panel is always in the DOM — we just flip data-state to make the
+    // log region visible and paint the "running" treatment.
+    consoleLog.replaceChildren();
+    setConsoleOutcome(null);
+    setConsoleHasLog(false);
+    setConsoleLabel(`${ACTION_LABELS[name]} · 运行中…`);
+    setConsoleState("running");
+
+    // Disable every action button while one is in-flight so users can't
+    // stack start+stop races. We restore them from renderOpenClaw after
+    // the post-action probe refreshes the gateway state.
+    for (const b of actionButtons) b.disabled = true;
+    btn.dataset.loading = "1";
+
+    const url = name === "fix"
+      ? "/api/openclaw/fix"
+      : `/api/openclaw/action?name=${encodeURIComponent(name)}`;
+    let finalOutcome = "ok";
+    try {
+      const res = await fetch(url, withAuth({ method: "POST" }));
+      if (res.status === 401) {
+        clearToken();
+        await promptForToken(`需要 bearer token 才能执行 ${ACTION_LABELS[name]}。`);
+        throw new Error("unauthorized");
+      }
+      if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`);
+      await consumeNDJSON(res.body, (ev) => {
+        applyStreamEvent(ev);
+        if (ev.phase === "end" && ev.outcome && ev.outcome !== "ok") {
+          finalOutcome = ev.outcome;
+        }
+      });
+    } catch (err) {
+      appendConsoleLine(`请求失败:${err.message || err}`, "err");
+      finalOutcome = "error";
+    } finally {
+      btn.dataset.loading = "0";
+      setConsoleOutcome(finalOutcome === "ok" ? "ok" : "err");
+      setConsoleLabel(
+        finalOutcome === "ok"
+          ? `${ACTION_LABELS[name]} · 完成`
+          : `${ACTION_LABELS[name]} · 失败`,
+      );
+      // Leave the drawer expanded on completion so the user can scan
+      // the final output; they collapse it themselves when done.
+      setConsoleState("expanded");
+      // ProbeNow on the backend keeps the 5s status poll cheap; we
+      // still kick one off here so the button row and sub update
+      // immediately after stream close.
+      pollOpenClaw();
+    }
+  }
+
+  // consumeNDJSON reads a ReadableStream and invokes onEvent for each
+  // newline-delimited JSON object. Partial lines across chunk boundaries
+  // are buffered. Malformed lines are logged (console.warn) and skipped;
+  // we must not throw because the backend still owes us a "final" event.
+  async function consumeNDJSON(body, onEvent) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        try { onEvent(JSON.parse(line)); }
+        catch (e) { console.warn("clawmast: bad ndjson line", line, e); }
+      }
+    }
+    const tail = buf.trim();
+    if (tail) {
+      try { onEvent(JSON.parse(tail)); }
+      catch (e) { console.warn("clawmast: bad ndjson tail", tail, e); }
+    }
+  }
+
+  // --- Settings · ClawMast update check -------------------------------
+  //
+  // The update UI moved out of the dashboard so the console page is
+  // focused on OpenClaw. The nav-dot next to 设置 surfaces a new
+  // release without forcing the user to navigate.
+
+  settingsCheck.addEventListener("click", runSettingsCheck);
+  settingsInstall.addEventListener("click", runSettingsInstall);
+
+  async function runSettingsCheck() {
+    settingsCheck.dataset.loading = "1";
+    settingsCheck.disabled = true;
     try {
       const u = await jfetch("/api/updates/check", { method: "POST" });
-      renderUpdateResult(u);
+      renderSettingsUpdate(u);
     } catch (err) {
-      updateResult.hidden = false;
-      applyUpdateTone("danger");
-      updateResultText.textContent = `请求失败:${err.message || err}`;
-      updateResultMeta.hidden = true;
-      installBtn.hidden = true;
+      settingsUpdateNote.textContent = `请求失败:${err.message || err}`;
+      settingsInstall.hidden = true;
     } finally {
-      checkBtn.dataset.loading = "0";
-      checkBtn.disabled = false;
+      settingsCheck.dataset.loading = "0";
+      settingsCheck.disabled = false;
     }
   }
 
-  function renderUpdateResult(u) {
-    updateResult.hidden = false;
-    if (u.channel) updateChannelEl.textContent = u.channel;
-
-    let tone, headline, metaBits = [];
+  function renderSettingsUpdate(u) {
+    if (u.channel) settingsChannel.textContent = u.channel;
+    let note = "";
     let canInstall = false;
     if (u.source === "signed-manifest") {
-      tone = u.update_available ? "warn" : "ok";
-      headline = u.update_available
-        ? `有新版本:${u.latest}(当前 ${u.current})`
-        : `已是最新:${u.current}`;
-      if (u.published_at) metaBits.push(`发布于 ${u.published_at}`);
-      if (u.notes) metaBits.push(u.notes);
-      // Only surface install when the signature verified AND the
-      // channel actually advertises a different version. Anything
-      // less (error, not-configured, already up-to-date) must not
-      // expose the button — we would either have nothing to install
-      // or nothing that passes manifest verification.
-      canInstall = u.update_available === true;
+      settingsLatest.textContent = u.latest || "—";
+      if (u.update_available) {
+        note = `发现新版本 ${u.latest}(当前 ${u.current})`;
+        if (u.published_at) note += ` · 发布于 ${u.published_at}`;
+        canInstall = true;
+      } else {
+        note = `已是最新版本(${u.current})`;
+      }
+      if (u.notes) note += ` · ${u.notes}`;
+    } else if (u.source === "not-configured") {
+      settingsLatest.textContent = "未配置";
+      note = u.note || "未配置更新通道(CLAWMAST_UPDATE_URL)";
     } else if (u.source === "error") {
-      const copy = UPDATE_ERROR_COPY[u.error_code] || UPDATE_ERROR_COPY.unreachable;
-      tone = copy.tone;
-      headline = copy.headline;
-      if (u.note) metaBits.push(u.note);
+      settingsLatest.textContent = "检查失败";
+      note = u.note || `错误:${u.error_code || "未知"}`;
     } else {
-      const copy = UPDATE_SOURCE_COPY[u.source] || { tone: "muted", headline: u.source || "未知来源" };
-      tone = copy.tone;
-      headline = copy.headline || copy.headline || u.source;
-      if (u.note) metaBits.push(u.note);
+      settingsLatest.textContent = u.latest || "—";
+      note = u.note || u.source || "";
     }
-
-    applyUpdateTone(tone);
-    updateResultText.textContent = headline;
-    if (metaBits.length) {
-      updateResultMeta.hidden = false;
-      updateResultMeta.textContent = metaBits.join(" · ");
-    } else {
-      updateResultMeta.hidden = true;
-      updateResultMeta.textContent = "";
-    }
-    if (u.source === "not-configured" && u.note) updateNote.textContent = u.note;
-    installBtn.hidden = !canInstall;
-    installBtn.disabled = !canInstall;
-    installBtn.dataset.version = u.latest || "";
+    settingsUpdateNote.textContent = note;
+    settingsInstall.hidden = !canInstall;
+    settingsInstall.disabled = !canInstall;
+    settingsInstall.dataset.version = u.latest || "";
+    settingsUpdateDot.hidden = !canInstall;
   }
 
-  // Copy tables for /api/updates/install errors. Keyed on the
-  // error_code field so the UI can render targeted remediation
-  // ("do not install this artefact" vs "try again later").
-  const INSTALL_ERROR_COPY = {
-    "bad-sha256":         "artefact 哈希与已签名 manifest 不一致,拒绝安装",
-    "size-mismatch":      "artefact 大小与 manifest 声明不一致",
-    "bad-tarball":        "artefact 打包异常或含不安全路径",
-    "no-artifact":        "该发布未提供匹配本机的构建",
-    "already-installed":  "已在目标版本,无需安装",
-    "not-configured":     "未配置更新通道(CLAWMAST_UPDATE_URL)",
-    "install-root-unknown": "安装根目录未知;standalone 模式下不能自更新",
-    "restart-unavailable":  "worker 未挂接重启钩子,拒绝原地旋转符号链接",
-    "bad-signature":      "签名验证失败 — 切勿安装",
-    "channel-mismatch":   "manifest 通道与本机配置不一致",
-    "manifest-missing":   "通道未发布 manifest",
-    "unreachable":        "无法连接更新通道",
-  };
-
-  async function installUpdate() {
-    const targetVersion = installBtn.dataset.version || "";
+  async function runSettingsInstall() {
+    const targetVersion = settingsInstall.dataset.version || "";
     const ok = window.confirm(
       `确认下载并安装 ${targetVersion || "最新版本"}?\n\n` +
       `将校验签名与哈希,写入 versions/ 目录并旋转 current/previous 符号链接,` +
       `然后 worker 会平稳退出;监工(clawmastd)会在新链接下重新拉起。`,
     );
     if (!ok) return;
-    installBtn.dataset.loading = "1";
-    installBtn.disabled = true;
-    checkBtn.disabled = true;
+    settingsInstall.dataset.loading = "1";
+    settingsInstall.disabled = true;
+    settingsCheck.disabled = true;
     try {
-      const res = await fetch("/api/updates/install", { method: "POST" });
+      const res = await fetch("/api/updates/install", withAuth({ method: "POST" }));
       const payload = await res.json();
       if (!res.ok) {
-        const copy = INSTALL_ERROR_COPY[payload.error_code]
-          || payload.note || `HTTP ${res.status}`;
-        applyUpdateTone("danger");
-        updateResult.hidden = false;
-        updateResultText.textContent = `安装失败:${copy}`;
-        updateResultMeta.hidden = !payload.note;
-        updateResultMeta.textContent = payload.note || "";
+        settingsUpdateNote.textContent = `安装失败:${payload.note || payload.error_code || res.status}`;
         return;
       }
-      applyUpdateTone("ok");
-      updateResult.hidden = false;
-      updateResultText.textContent =
-        `已安装 ${payload.version}(原 ${payload.previous_version || "?"});` +
-        `worker 即将重启并在新版本下恢复,页面会短暂中断。`;
-      updateResultMeta.hidden = false;
-      updateResultMeta.textContent =
-        `current → ${payload.current_after} · previous → ${payload.previous_after || "—"} · ` +
-        `下载 ${payload.bytes_downloaded || 0} bytes`;
+      settingsUpdateNote.textContent =
+        `已安装 ${payload.version}(原 ${payload.previous_version || "?"});worker 即将重启。`;
       setStatus("error", "即将重启…");
-      installBtn.hidden = true;
+      settingsInstall.hidden = true;
+      settingsUpdateDot.hidden = true;
     } catch (err) {
-      applyUpdateTone("danger");
-      updateResult.hidden = false;
-      updateResultText.textContent = `请求失败:${err.message || err}`;
-      updateResultMeta.hidden = true;
+      settingsUpdateNote.textContent = `请求失败:${err.message || err}`;
     } finally {
-      installBtn.dataset.loading = "0";
-      checkBtn.disabled = false;
+      settingsInstall.dataset.loading = "0";
+      settingsCheck.disabled = false;
     }
   }
 
-  // --- history timeline -------------------------------------------------
-
-  const EVENT_LABELS = {
-    spawn: "启动", crash: "崩溃", rollback: "回滚", stop: "停止",
-  };
-
-  function fmtRelative(d) {
-    const delta = (d.getTime() - Date.now()) / 1000;
-    const abs = Math.abs(delta);
-    if (abs < 60)        return rtf.format(Math.round(delta), "second");
-    if (abs < 3600)      return rtf.format(Math.round(delta / 60), "minute");
-    if (abs < 86400)     return rtf.format(Math.round(delta / 3600), "hour");
-    return rtf.format(Math.round(delta / 86400), "day");
+  // --- Hash-based SPA router -------------------------------------------
+  //
+  // The legacy Next.js app routed /dashboard, /terminal, /logs, /settings
+  // as full pages. v0.1.0 only has a backend for /dashboard + /settings,
+  // so Terminal and Logs render a "coming later" stub (see .stub in
+  // styles.css) to keep the sidebar tree navigable without shipping
+  // half-built screens.
+  const VIEW_IDS = ["dashboard", "terminal", "logs", "settings"];
+  function currentView() {
+    const h = (window.location.hash || "").replace(/^#\/?/, "").split("/")[0];
+    return VIEW_IDS.includes(h) ? h : "dashboard";
   }
-
-  function renderEntry(e) {
-    const li = document.createElement("li");
-    li.className = `tl tl-${e.event}`;
-    const dot = document.createElement("span");
-    dot.className = "tl-dot";
-    dot.setAttribute("aria-hidden", "true");
-    const body = document.createElement("div");
-    body.className = "tl-body";
-
-    const head = document.createElement("div");
-    head.className = "tl-head";
-    const label = document.createElement("span");
-    label.className = "tl-label";
-    label.textContent = EVENT_LABELS[e.event] || e.event;
-    const ver = document.createElement("span");
-    ver.className = "mono small tl-version";
-    ver.textContent = e.version || "—";
-    head.appendChild(label);
-    head.appendChild(ver);
-    if (e.exit_code !== undefined && e.exit_code !== null) {
-      const code = document.createElement("span");
-      code.className = "mono small tl-code";
-      code.textContent = `exit=${e.exit_code}`;
-      head.appendChild(code);
+  function showView(id) {
+    for (const v of VIEW_IDS) {
+      const panel = document.getElementById(`view-${v}`);
+      if (!panel) continue;
+      const on = v === id;
+      panel.hidden = !on;
+      panel.classList.toggle("active", on);
     }
-
-    const meta = document.createElement("div");
-    meta.className = "tl-meta";
-    const ts = new Date(e.ts);
-    const abs = document.createElement("time");
-    abs.className = "mono small";
-    abs.dateTime = e.ts;
-    abs.textContent = tfmt.format(ts);
-    const rel = document.createElement("span");
-    rel.className = "muted small";
-    rel.textContent = fmtRelative(ts);
-    meta.appendChild(abs);
-    meta.appendChild(document.createTextNode(" · "));
-    meta.appendChild(rel);
-    if (e.reason) {
-      meta.appendChild(document.createTextNode(" · "));
-      const reason = document.createElement("span");
-      reason.className = "muted small";
-      reason.textContent = e.reason;
-      meta.appendChild(reason);
-    }
-
-    body.appendChild(head);
-    body.appendChild(meta);
-    li.appendChild(dot);
-    li.appendChild(body);
-    return li;
-  }
-
-  async function loadHistory() {
-    try {
-      const res = await fetch("/api/history?limit=20");
-      if (res.status === 503) {
-        historyCard.hidden = true;
-        return;
+    for (const link of document.querySelectorAll("[data-view]")) {
+      link.classList.toggle("active", link.dataset.view === id);
+      if (link.tagName === "A") {
+        link.setAttribute("aria-current", link.dataset.view === id ? "page" : "false");
       }
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const payload = await res.json();
-      historyCard.hidden = false;
-      historyList.replaceChildren();
-      const entries = (payload.entries || []).slice().reverse();
-      for (const e of entries) historyList.appendChild(renderEntry(e));
-      historyEmpty.hidden = entries.length > 0;
-      historyHint.innerHTML = `共 <span class="mono small">${payload.count}</span> 条记录 · <span class="mono small">${payload.path}</span>`;
-    } catch (err) {
-      historyCard.hidden = false;
-      historyList.replaceChildren();
-      historyEmpty.hidden = false;
-      historyEmpty.textContent = `加载失败:${err.message || err}`;
     }
   }
+  window.addEventListener("hashchange", () => showView(currentView()));
+  showView(currentView());
 
-  // --- blacklist -------------------------------------------------------
-
-  function fmtTs(iso) {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return `${tfmt.format(d)} · ${fmtRelative(d)}`;
-  }
-
-  function renderBlacklistEntry(e) {
-    const li = document.createElement("li");
-    li.className = "bl-item";
-    const head = document.createElement("div");
-    head.className = "bl-head";
-    const ver = document.createElement("span");
-    ver.className = "mono bl-version";
-    ver.textContent = e.version;
-    head.appendChild(ver);
-    if (e.version && e.version === currentVersion) {
-      const tag = document.createElement("span");
-      tag.className = "bl-tag";
-      tag.textContent = "当前";
-      head.appendChild(tag);
-    }
-    const meta = document.createElement("div");
-    meta.className = "bl-meta mono small";
-    meta.textContent = [fmtTs(e.ts), e.reason].filter(Boolean).join(" · ");
-    li.appendChild(head);
-    li.appendChild(meta);
-    return li;
-  }
-
-  async function loadBlacklist() {
-    try {
-      const res = await fetch("/api/blacklist");
-      if (res.status === 503) {
-        blacklistCard.hidden = true;
-        return;
-      }
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const payload = await res.json();
-      blacklistCard.hidden = false;
-      blacklistList.replaceChildren();
-      const entries = (payload.entries || []).slice().reverse();
-      for (const e of entries) blacklistList.appendChild(renderBlacklistEntry(e));
-      blacklistEmpty.hidden = entries.length > 0;
-    } catch (err) {
-      blacklistCard.hidden = false;
-      blacklistEmpty.hidden = false;
-      blacklistEmpty.textContent = `加载失败:${err.message || err}`;
-    }
-  }
-
-  async function markCurrentBad() {
-    const ver = currentVersion || "(未知)";
-    const ok = window.confirm(
-      `确认把版本 ${ver} 标记为坏?\n\n监工(clawmastd)将立即回滚到上一个版本,` +
-      `并在后续启动中拒绝再次拉起该版本。`,
-    );
-    if (!ok) return;
-    markBadBtn.dataset.loading = "1";
-    markBadBtn.disabled = true;
-    try {
-      const res = await fetch("/api/blacklist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "user-marked-bad" }),
-      });
-      if (!res.ok && res.status !== 202) {
-        throw new Error(`${res.status} ${res.statusText}`);
-      }
-      const payload = await res.json();
-      blacklistResult.hidden = false;
-      if (payload.rollback_requested) {
-        blacklistResult.textContent =
-          `已标记 ${payload.marked_version} 为坏,worker 即将退出(65),监工会翻转符号链接。` +
-          `几秒后此页面可能短暂中断,恢复后将运行在上一个版本。`;
-        setStatus("error", "即将回滚…");
-      } else {
-        blacklistResult.textContent = `已标记 ${payload.marked_version} 为坏(未触发回滚)。`;
-      }
-      await loadBlacklist();
-    } catch (err) {
-      blacklistResult.hidden = false;
-      blacklistResult.textContent = `标记失败:${err.message || err}`;
-    } finally {
-      markBadBtn.dataset.loading = "0";
-      markBadBtn.disabled = false;
-    }
-  }
-
-  historyRefreshBtn.addEventListener("click", loadHistory);
-  checkBtn.addEventListener("click", checkUpdates);
-  installBtn.addEventListener("click", installUpdate);
-  markBadBtn.addEventListener("click", markCurrentBad);
-
-  loadVersion().then(loadBlacklist);
+  // Initial paint + background refresh loops. /api/updates/check is
+  // kicked off once at boot so the nav-dot can light up without user
+  // intervention; subsequent checks happen on demand from the Settings
+  // button (24h auto-recheck lands with v0.2 supervisor persistence).
+  loadVersion();
   poll();
-  loadHistory();
+  pollOpenClaw();
+  runSettingsCheck().catch(() => {});
+  // 3s matches the server-side ActivePollInterval so a fresh snapshot
+  // is usually waiting when the client polls; the backend backs off to
+  // 5s while the gateway is down, so the extra client cadence mostly
+  // just shortens the UX lag after a user action settles.
   setInterval(poll, 5000);
-  setInterval(loadHistory, 15000);
-  setInterval(loadBlacklist, 30000);
+  setInterval(pollOpenClaw, 3000);
 })();
+
+

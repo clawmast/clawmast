@@ -2,119 +2,364 @@
 <html lang="zh-Hans">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0a0c10" />
     <title>ClawMast</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="shell" aria-live="polite">
-      <header class="hero">
-        <div class="logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 12a8 8 0 1 0 16 0a8 8 0 1 0-16 0"/>
-            <path d="M8 12h8"/>
-            <path d="M12 8v8"/>
-          </svg>
+    <div class="app">
+      <!-- Desktop sidebar -->
+      <aside class="sidebar" aria-label="主导航">
+        <div class="sidebar-logo">
+          <span class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h8l-1 8 10-12h-8z"/></svg>
+          </span>
+          <span>ClawMast</span>
         </div>
-        <h1>ClawMast</h1>
-        <p class="tagline">本地优先的 OpenClaw 恢复控制台</p>
+        <nav class="sidebar-nav" data-nav="main">
+          <a href="#/dashboard" class="nav-item" data-view="dashboard">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            <span>控制台</span>
+          </a>
+          <a href="#/terminal" class="nav-item" data-view="terminal">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><line x1="13" y1="15" x2="17" y2="15"/></svg>
+            <span>终端</span>
+          </a>
+          <a href="#/logs" class="nav-item" data-view="logs">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            <span>日志</span>
+          </a>
+        </nav>
+        <div class="sidebar-foot">
+          <nav class="sidebar-nav-bottom" data-nav="settings">
+            <a href="#/settings" class="nav-item" data-view="settings">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+              <span>设置</span>
+              <!-- Tiny dot appears when a ClawMast update is available.
+                   The full "v0.1 → v0.2" UI lives inside #view-settings so
+                   the dashboard stays focused on OpenClaw. -->
+              <span class="nav-dot" id="settings-update-dot" hidden aria-label="有可用更新"></span>
+            </a>
+          </nav>
+          <div class="sidebar-status">
+            <span class="tiny">Worker</span>
+            <span class="badge badge-unknown" id="status-badge">
+              <span class="dot" aria-hidden="true"></span>
+              <span id="status-text">检测中</span>
+            </span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Mobile header -->
+      <header class="mobile-header">
+        <div class="logo">
+          <span class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h8l-1 8 10-12h-8z"/></svg>
+          </span>
+          ClawMast
+        </div>
+        <span class="badge badge-unknown" id="status-badge-mobile" data-mirror="status">
+          <span class="dot" aria-hidden="true"></span>
+          <span data-mirror="status-text">检测中</span>
+        </span>
       </header>
 
-      <section class="card status" id="status-card">
-        <div class="row">
-          <span class="label">运行状态</span>
-          <span class="badge badge-unknown" id="status-badge">
-            <span class="dot" aria-hidden="true"></span>
-            <span id="status-text">正在检测…</span>
-          </span>
-        </div>
-        <div class="row">
-          <span class="label">版本</span>
-          <span class="mono" id="version">—</span>
-        </div>
-        <div class="row">
-          <span class="label">构建</span>
-          <span class="mono small" id="build">—</span>
-        </div>
-        <div class="row">
-          <span class="label">运行时长</span>
-          <span class="mono" id="uptime">—</span>
-        </div>
-      </section>
+      <!-- Main content -->
+      <main class="content" aria-live="polite">
+        <div class="content-inner">
+          <!-- Dashboard view (the only backend-backed view in v0.1.0) -->
+          <section class="view" id="view-dashboard" data-view="dashboard">
 
-      <section class="card update" id="update-card">
-        <div class="row spaced">
-          <div>
-            <div class="label">更新</div>
-            <div class="hint" id="update-note">点击检查是否有新版本。</div>
-          </div>
-          <div class="btn-group">
-            <button id="check-updates" class="btn primary" type="button">
-              <span class="btn-label">检查更新</span>
-              <span class="btn-spinner" aria-hidden="true"></span>
-            </button>
-            <button id="install-update" class="btn accent" type="button" hidden>
-              <span class="btn-label">下载并安装</span>
-              <span class="btn-spinner" aria-hidden="true"></span>
-            </button>
-          </div>
-        </div>
-        <div class="row" id="update-channel-row">
-          <span class="label">通道</span>
-          <span class="mono small" id="update-channel">—</span>
-        </div>
-        <div class="update-result" id="update-result" hidden>
-          <div class="row">
-            <span class="label">状态</span>
-            <span class="mono small" id="update-result-text">—</span>
-          </div>
-          <div class="hint muted" id="update-result-meta" hidden></div>
-        </div>
-      </section>
+          <!-- OpenClaw object card.
+               Self-contained: identity (header), metadata (meta-list),
+               controls (card-foot). Output lives in the persistent
+               bottom console so the dashboard layout stays stable. -->
+          <section class="oc-card" id="openclaw-card">
+            <header class="oc-head">
+              <span class="oc-icon" id="openclaw-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>
+              </span>
+              <div class="oc-head-body">
+                <h1 class="oc-title">OpenClaw</h1>
+                <p class="oc-sub" id="openclaw-sub">连接本机 openclaw CLI 并探测网关状态</p>
+              </div>
+              <span class="badge badge-unknown" id="openclaw-badge">
+                <span class="dot" aria-hidden="true"></span>
+                <span id="openclaw-badge-text">检测中</span>
+              </span>
+            </header>
 
-      <section class="card history" id="history-card" hidden>
-        <div class="row spaced">
-          <div>
-            <div class="label">升级与运行历史</div>
-            <div class="hint" id="history-hint">来自 <span class="mono small">state/history.json</span></div>
-          </div>
-          <button id="history-refresh" class="btn ghost" type="button" aria-label="刷新历史">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
-              <path d="M21 3v5h-5"/>
-              <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
-              <path d="M3 21v-5h5"/>
-            </svg>
-          </button>
-        </div>
-        <ol class="timeline" id="history-list" aria-live="polite"></ol>
-        <div class="hint muted" id="history-empty" hidden>暂无记录。</div>
-      </section>
+            <!-- Structured health report. Each row is a single signal
+                 the operator needs to resolve 运行中 / 异常 / 已停止 at
+                 a glance, with a ✅ / ❌ / ⚪ glyph so the row itself
+                 carries the verdict without the user having to parse
+                 prose. Rows hide before the first probe lands. -->
+            <ul class="meta-list" id="openclaw-meta">
+              <li class="meta-row health-row" id="openclaw-row-service">
+                <span class="meta-label">服务</span>
+                <span class="meta-value health-status">
+                  <span class="health-icon" data-state="unknown" aria-hidden="true"></span>
+                  <span class="health-text" id="openclaw-service-text">检测中</span>
+                </span>
+              </li>
+              <li class="meta-row health-row" id="openclaw-row-port">
+                <span class="meta-label">端口</span>
+                <span class="meta-value health-status">
+                  <span class="health-icon" data-state="unknown" aria-hidden="true"></span>
+                  <span class="health-text" id="openclaw-port-text">—</span>
+                </span>
+              </li>
+              <li class="meta-row" id="openclaw-channels-row" hidden>
+                <span class="meta-label">渠道 · 会话</span>
+                <span class="meta-value" id="openclaw-channels">—</span>
+              </li>
+              <li class="meta-row" id="openclaw-agent-row" hidden>
+                <span class="meta-label">默认 Agent</span>
+                <span class="meta-value" id="openclaw-agent">—</span>
+              </li>
+              <li class="meta-row">
+                <span class="meta-label">上次探测</span>
+                <span class="meta-value" id="openclaw-probed">—</span>
+              </li>
+            </ul>
 
-      <section class="card blacklist" id="blacklist-card" hidden>
-        <div class="row spaced">
-          <div>
-            <div class="label">版本黑名单</div>
-            <div class="hint" id="blacklist-hint">把当前版本标记为坏:监工将回滚到上一个版本,并拒绝再次拉起被标记的版本。</div>
-          </div>
-          <button id="mark-bad" class="btn danger" type="button">
-            <span class="btn-label">标记当前为坏</span>
-            <span class="btn-spinner" aria-hidden="true"></span>
-          </button>
-        </div>
-        <ul class="blacklist-list" id="blacklist-list" aria-live="polite"></ul>
-        <div class="hint muted" id="blacklist-empty">暂无被拉黑的版本。</div>
-        <div class="hint muted" id="blacklist-result" hidden></div>
-      </section>
+            <!-- Controls. The button set is state-driven (see
+                 setActionState in app.js):
+                   运行中 → 重启 · 停止
+                   异常   → 一键修复 · 启动
+                   已停止 → 启动
+                 一键修复 and 重启 interrupt active sessions, so both
+                 route through the confirmation dialog below. Command
+                 output lives in the persistent #console further down
+                 the page — this footer stays action-only. -->
+            <footer class="oc-foot">
+              <button id="action-fix" class="btn primary" type="button" disabled data-action="fix">
+                <span class="btn-spinner" aria-hidden="true"></span>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                <span class="btn-label">一键修复</span>
+              </button>
+              <div class="action-grid" id="action-secondary">
+                <button class="btn" type="button" data-action="start" disabled>
+                  <span class="btn-spinner" aria-hidden="true"></span>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  <span class="btn-label">启动</span>
+                </button>
+                <button class="btn" type="button" data-action="restart" disabled hidden>
+                  <span class="btn-spinner" aria-hidden="true"></span>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+                  <span class="btn-label">重启</span>
+                </button>
+                <button class="btn" type="button" data-action="stop" disabled hidden>
+                  <span class="btn-spinner" aria-hidden="true"></span>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                  <span class="btn-label">停止</span>
+                </button>
+              </div>
+            </footer>
+          </section>
 
-      <footer class="foot">
-        <span class="mono small" id="footer-full">—</span>
-        <span class="sep">·</span>
-        <a href="https://clawmast.com" class="link">clawmast.com</a>
-      </footer>
-    </main>
+          <!-- Console output region. Lives in the normal document flow
+               (not a fixed overlay) so it occupies a stable slot right
+               below the OpenClaw card. When idle, the log region is
+               hidden and only a thin status bar shows; any action
+               auto-expands it with live NDJSON output. -->
+          <section class="console" id="console" data-state="collapsed" aria-label="命令输出">
+            <header class="console-head" id="console-head">
+              <span class="console-status">
+                <span class="console-dot" aria-hidden="true"></span>
+                <span class="console-label" id="console-label">控制台 · 等待操作</span>
+              </span>
+              <span class="console-spacer"></span>
+              <button class="btn ghost console-btn" type="button" id="console-clear" aria-label="清空输出" title="清空">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+              </button>
+              <button class="btn ghost console-btn" type="button" id="console-toggle" aria-label="展开 / 折叠" title="展开 / 折叠">
+                <svg class="console-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+            </header>
+            <pre class="console-log" id="console-log" aria-live="polite"></pre>
+          </section>
+
+          <footer class="foot">
+            <span class="mono small" id="footer-version">—</span>
+            <span class="sep">·</span>
+            <span class="mono small muted" id="footer-uptime">—</span>
+            <span class="sep">·</span>
+            <a href="https://clawmast.com" class="link">clawmast.com</a>
+          </footer>
+          </section>
+
+          <!-- Terminal view (placeholder — backend unimplemented in v0.1.0) -->
+          <section class="view" id="view-terminal" data-view="terminal" hidden>
+            <div class="stub">
+              <div class="stub-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><line x1="13" y1="15" x2="17" y2="15"/></svg>
+              </div>
+              <h1 class="stub-title">终端</h1>
+              <p class="stub-sub">Web PTY 终端将在后续版本中提供。当前 v0.1.0 聚焦于 OpenClaw 监控与一键修复。</p>
+              <a href="#/dashboard" class="link">返回控制台 →</a>
+            </div>
+          </section>
+
+          <!-- Logs view (placeholder) -->
+          <section class="view" id="view-logs" data-view="logs" hidden>
+            <div class="stub">
+              <div class="stub-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              </div>
+              <h1 class="stub-title">日志</h1>
+              <p class="stub-sub">结构化日志浏览器将在后续版本中提供。当前可在"控制台 → 升级与运行历史"中查看监工事件。</p>
+              <a href="#/dashboard" class="link">返回控制台 →</a>
+            </div>
+          </section>
+
+          <!-- Settings view: ClawMast 自身配置与版本 -->
+          <section class="view" id="view-settings" data-view="settings" hidden>
+            <div class="settings-head">
+              <h1 class="settings-title">设置</h1>
+              <p class="settings-sub">ClawMast 自身的版本信息与更新偏好。Provider / 模型等 OpenClaw 相关设置请在其 CLI 中配置。</p>
+            </div>
+
+            <!-- ClawMast 版本 + 更新 -->
+            <section class="group-card">
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">当前版本</span>
+                    <span class="row-value" id="settings-version">—</span>
+                  </div>
+                  <div class="row-detail mono small" id="settings-build">—</div>
+                </div>
+              </div>
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">最新版本</span>
+                    <span class="row-value" id="settings-latest">—</span>
+                  </div>
+                  <div class="row-detail" id="settings-update-note">尚未检查。</div>
+                </div>
+              </div>
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">通道</span>
+                    <span class="row-value" id="settings-channel">—</span>
+                  </div>
+                </div>
+              </div>
+              <div class="group-row group-actions">
+                <div class="btn-group">
+                  <button id="settings-check" class="btn" type="button">
+                    <span class="btn-spinner" aria-hidden="true"></span>
+                    <span class="btn-label">检查更新</span>
+                  </button>
+                  <button id="settings-install" class="btn accent" type="button" hidden>
+                    <span class="btn-spinner" aria-hidden="true"></span>
+                    <span class="btn-label">下载并安装</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <!-- 自动更新偏好(UI 占位,真正的持久化逻辑将在 v0.2 supervisor 中实现) -->
+            <section class="group-card">
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">自动检查更新</span>
+                    <label class="switch">
+                      <input type="checkbox" id="settings-autocheck" checked disabled />
+                      <span class="switch-slider" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="row-detail">页面打开时自动检查一次,以及每 24 小时定期检查。</div>
+                </div>
+              </div>
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">自动安装更新</span>
+                    <label class="switch">
+                      <input type="checkbox" id="settings-autoinstall" disabled />
+                      <span class="switch-slider" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="row-detail muted">v0.2 监工(clawmastd)上线后可用,届时失败可自动回滚。</div>
+                </div>
+              </div>
+            </section>
+
+            <p class="hint muted settings-hint">
+              构建:<span class="mono small" id="settings-full">—</span>
+            </p>
+          </section>
+        </div>
+      </main>
+
+      <!-- Mobile bottom tab bar -->
+      <nav class="bottom-nav" aria-label="主导航(移动端)" data-nav="bottom">
+        <a href="#/dashboard" class="bn-item" data-view="dashboard">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span>控制台</span>
+        </a>
+        <a href="#/terminal" class="bn-item" data-view="terminal">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><line x1="13" y1="15" x2="17" y2="15"/></svg>
+          <span>终端</span>
+        </a>
+        <a href="#/logs" class="bn-item" data-view="logs">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          <span>日志</span>
+        </a>
+        <a href="#/settings" class="bn-item" data-view="settings">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>设置</span>
+        </a>
+      </nav>
+    </div>
+
+    <!-- Destructive-action confirmation. Reused by 一键修复 and 重启;
+         JS fills #confirm-title / #confirm-body before showModal() and
+         listens for the submit event on #confirm-form. Stop does not
+         route through here because its intent is unambiguous. -->
+    <dialog id="confirm-dialog" class="modal">
+      <form method="dialog" class="modal-body" id="confirm-form">
+        <h2 id="confirm-title">确认操作</h2>
+        <p class="hint" id="confirm-body">此操作将中断当前会话。</p>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="confirm-cancel" value="cancel">取消</button>
+          <button type="submit" class="btn accent" id="confirm-ok" value="ok">继续</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Bearer token prompt -->
+    <dialog id="token-dialog" class="modal">
+      <form method="dialog" class="modal-body" id="token-form">
+        <h2>需要访问凭据</h2>
+        <p class="hint">
+          首次远程访问 clawmast 需要粘贴一次 bearer token。
+          token 由 worker 首次启动时生成并打印在日志 / 控制台中,位于
+          <code class="mono small">~/.clawmast/state/token</code>
+          或安装目录下的 <code class="mono small">state/token</code>。
+        </p>
+        <label for="token-input">Bearer token</label>
+        <input id="token-input" class="mono" type="password" autocomplete="off"
+               required pattern="[a-f0-9]{16,}" minlength="16"
+               placeholder="64 位十六进制" />
+        <div class="modal-actions">
+          <button type="submit" class="btn primary">保存并继续</button>
+        </div>
+        <p class="hint muted" id="token-error" hidden></p>
+      </form>
+    </dialog>
+
     <script src="/app.js" defer></script>
   </body>
 </html>
+
+

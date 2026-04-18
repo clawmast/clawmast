@@ -19,6 +19,7 @@ import (
 	"aead.dev/minisign"
 
 	"github.com/clawmast/clawmast/internal/agent"
+	"github.com/clawmast/clawmast/internal/openclaw"
 	"github.com/clawmast/clawmast/internal/sdnotify"
 	"github.com/clawmast/clawmast/internal/version"
 )
@@ -78,6 +79,24 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("load update pubkey: %w", err)
 		}
+		tok, err := agent.LoadOrCreateToken(resolveStateDir(installRoot))
+		if err != nil {
+			return fmt.Errorf("bearer token: %w", err)
+		}
+		if tok.Generated {
+			logger.Info("bearer token generated",
+				"component", "agent",
+				"path", tok.Path,
+				"fingerprint", tok.Fingerprint(),
+				"hint", "paste the full token once in the clawmast UI; it is stored in your browser")
+		} else {
+			logger.Info("bearer token loaded",
+				"component", "agent",
+				"path", tok.Path,
+				"fingerprint", tok.Fingerprint())
+		}
+		ocMgr := openclaw.NewManager(openclaw.Runner{}, 0, logger)
+		go ocMgr.Start(ctx)
 		srv = agent.NewServer(agent.Config{
 			Addr:        httpAddr,
 			Logger:      logger,
@@ -97,6 +116,8 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 			UpdateBaseURL: envOr("CLAWMAST_UPDATE_URL", ""),
 			UpdateChannel: envOr("CLAWMAST_UPDATE_CHANNEL", "stable"),
 			UpdatePubKey:  pubKey,
+			OpenClaw:      ocMgr,
+			Token:         tok,
 		})
 		go func() { httpErrCh <- srv.Start(ctx) }()
 		// Give the listener a beat to bind so logs stay ordered; the
@@ -223,6 +244,22 @@ func resolveInstallRoot(logger *slog.Logger) string {
 	logger.Info("resolved install root from executable path",
 		"component", "worker", "install_root", root)
 	return root
+}
+
+// resolveStateDir picks where the bearer-token file lives. When the
+// worker runs under a clawmastd install root the supervisor-visible
+// <root>/state directory is preferred so both sides see the same file.
+// Standalone runs fall back to ~/.clawmast/state which stays per-user
+// without needing write access to the install tree.
+func resolveStateDir(installRoot string) string {
+	if installRoot != "" {
+		return filepath.Join(installRoot, "state")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".clawmast", "state")
 }
 
 // heartbeat ticks WATCHDOG=1 every interval until ctx is cancelled.
