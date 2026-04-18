@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill clean
 
 build: build-worker build-supervisor build-release
 
@@ -109,6 +109,13 @@ update-health-smoke:
 # hand-crafted one).
 release-smoke:
 	bash scripts/release-smoke.sh
+
+# I3 — supervisor drill covering the Iteration 3 additions that the
+# other smoke scripts do not exercise: bearer token persistence,
+# /api/openclaw/status schema, supervisor respawn after SIGKILL, and
+# graceful SIGTERM on clawmastd.
+supervisor-drill:
+	bash scripts/supervisor-drill.sh
 
 clean:
 	rm -rf bin/ dist/
