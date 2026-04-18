@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -101,6 +101,14 @@ update-install-smoke:
 # install-health-* reason, and clears the install-gate marker.
 update-health-smoke:
 	bash scripts/update-health-smoke.sh
+
+# T2-04 — release pipeline smoke. Exercises `clawmast-release build` +
+# `manifest` + `sign` end-to-end by feeding the tool's outputs into a
+# worker via POST /api/updates/check; asserts the worker accepts a
+# signed manifest produced by the real release pipeline (not a
+# hand-crafted one).
+release-smoke:
+	bash scripts/release-smoke.sh
 
 clean:
 	rm -rf bin/ dist/
