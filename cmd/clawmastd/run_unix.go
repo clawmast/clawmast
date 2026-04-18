@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/clawmast/clawmast/internal/supervisor"
 )
@@ -22,8 +23,11 @@ func run(ctx context.Context, opts options) error {
 	slog.SetDefault(logger)
 
 	cfg := supervisor.Config{
-		InstallRoot: opts.installRoot,
-		Logger:      logger,
+		InstallRoot:   opts.installRoot,
+		Logger:        logger,
+		StartTimeout:  parseDurationEnv("CLAWMAST_START_TIMEOUT", logger),
+		GateWindow:    parseDurationEnv("CLAWMAST_GATE_WINDOW", logger),
+		GateStableFor: parseDurationEnv("CLAWMAST_GATE_STABLE_FOR", logger),
 	}
 	sup, err := supervisor.New(cfg)
 	if err != nil {
@@ -36,4 +40,24 @@ func run(ctx context.Context, opts options) error {
 		return &exitError{code: stop.Code, reason: stop.Reason}
 	}
 	return runErr
+}
+
+// parseDurationEnv returns the parsed value of an env var or 0 when
+// unset / invalid. Zero reaches supervisor.Config.withDefaults as the
+// "use protocol default" sentinel, so callers can tune individual
+// knobs without having to restate the defaults. Malformed values are
+// logged at warn but never fatal: this is a smoke-test escape hatch,
+// not a load-bearing production dial.
+func parseDurationEnv(name string, logger *slog.Logger) time.Duration {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		logger.Warn("ignoring malformed duration env var",
+			"name", name, "value", raw, "err", err)
+		return 0
+	}
+	return d
 }

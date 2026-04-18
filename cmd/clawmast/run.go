@@ -30,6 +30,7 @@ import (
 // the supervisor handshake so clawmastd can observe a full Starting →
 // Running → Stopping lifecycle.
 func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
+	maybeSimulateStartupFailure(logger)
 	client, err := sdnotify.Open()
 	supervised := true
 	switch {
