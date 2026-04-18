@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	"github.com/clawmast/clawmast/internal/blacklist"
+	"github.com/clawmast/clawmast/internal/selfupdate"
 )
 
 // StopError wraps a non-zero supervisor exit code surfaced back to
@@ -36,6 +38,7 @@ type Supervisor struct {
 	history  *History
 	listener *Listener
 	tracker  *Tracker
+	gate     *HealthGate
 	current  atomic.Pointer[session]
 }
 
@@ -50,6 +53,7 @@ func New(cfg Config) (*Supervisor, error) {
 		cfg:     cfg,
 		log:     cfg.Logger.With("component", "supervisor"),
 		tracker: NewTracker(cfg.Backoff),
+		gate:    NewHealthGate(cfg.GateWindow, cfg.GateStableFor),
 	}, nil
 }
 
@@ -201,4 +205,43 @@ func (s *Supervisor) rollback(failingVersion, reason, stopMsg string) error {
 		Reason:  reason + "-no-rollback",
 	})
 	return &StopError{Code: 65, Reason: stopMsg}
+}
+
+// rollbackForInstallHealth is the install-gate failure path. It is
+// distinct from the crash-loop rollback because the decision is made
+// by a single event (one crash inside the window, or the deadline
+// elapsing) rather than the CrashCap sliding window. The caller has
+// already logged the gate-level decision; this method is responsible
+// for the durable side-effects:
+//
+//  1. add failingVersion to blacklist.json with the gate's fail
+//     reason, so a subsequent crash-rollback loop (or operator
+//     restart of clawmastd) refuses to spawn it again.
+//  2. delete the install-gate marker so the next spawn does not
+//     re-arm the gate on top of a known-bad version.
+//  3. reset the gate state machine.
+//  4. swap current↔previous and record EventRollback via the shared
+//     rollback() helper.
+//
+// Any individual step failing should not prevent the remaining ones
+// — blacklist write errors are logged, not propagated, because a
+// successful rollback is more important than a missing ledger
+// entry. The rollback itself is the only step that can meaningfully
+// error out (no previous to roll back to), and that error is
+// surfaced as a StopError 65 exactly like the crash-loop path.
+func (s *Supervisor) rollbackForInstallHealth(failingVersion string, reason GateFailReason) error {
+	if _, err := blacklist.Add(s.cfg.BlacklistPath, blacklist.Entry{
+		Version:   failingVersion,
+		Timestamp: time.Now().UTC(),
+		Reason:    string(reason),
+	}); err != nil {
+		s.log.Warn("blacklist add failed during install-health rollback",
+			slog.String("version", failingVersion),
+			slog.Any("err", err))
+	}
+	if err := selfupdate.DeleteGateMarker(s.cfg.InstallRoot); err != nil {
+		s.log.Warn("delete gate marker failed", slog.Any("err", err))
+	}
+	s.gate.Reset()
+	return s.rollback(failingVersion, string(reason), string(reason)+" with no rollback target")
 }

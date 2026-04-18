@@ -98,6 +98,20 @@ func Apply(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("selfupdate: rotate symlinks: %w", err)
 	}
 
+	// Write the install-gate marker last, after the symlink swap
+	// has committed. If marker writing fails we do not unwind the
+	// install — the new version is already `current` on disk — but
+	// we surface the error so the caller can log it. An install
+	// without a marker still rotates; it just won't be subject to
+	// the HealthGate on the next spawn, which matches pre-T2-03
+	// behaviour and is strictly safer than leaving a stale marker.
+	if err := WriteGateMarker(cfg.InstallRoot, GateMarker{
+		Version:     version,
+		InstalledAt: time.Now().UTC(),
+	}); err != nil {
+		return Result{}, fmt.Errorf("selfupdate: write gate marker: %w", err)
+	}
+
 	return Result{
 		Version:         version,
 		VersionDir:      target,

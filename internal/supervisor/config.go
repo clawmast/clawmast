@@ -52,6 +52,15 @@ type Config struct {
 	// Backoff governs restart timing and the crash-loop cap.
 	Backoff BackoffPolicy
 
+	// GateWindow is the total time a freshly installed version has
+	// to prove itself healthy. Zero → DefaultGateWindow (90 s).
+	// Smoke tests shrink this to a few seconds.
+	GateWindow time.Duration
+	// GateStableFor is how long a freshly installed version must
+	// stay in Running before the gate retires. Zero →
+	// DefaultGateStableFor (15 s).
+	GateStableFor time.Duration
+
 	// NotifySocketPath overrides the default
 	// <InstallRoot>/run/notify.sock location.
 	NotifySocketPath string
@@ -101,6 +110,12 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if out.Backoff.Base == 0 {
 		out.Backoff = NewBackoff()
+	}
+	if out.GateWindow == 0 {
+		out.GateWindow = DefaultGateWindow
+	}
+	if out.GateStableFor == 0 {
+		out.GateStableFor = DefaultGateStableFor
 	}
 	if out.ResolveWorker == nil && out.InstallRoot == "" {
 		return out, errors.New("supervisor: Config requires InstallRoot or ResolveWorker")
