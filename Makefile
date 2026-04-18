@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke clean
 
 build: build-worker build-supervisor build-release
 
@@ -94,6 +94,13 @@ update-smoke:
 # current/previous rotated correctly.
 update-install-smoke:
 	bash scripts/update-install-smoke.sh
+
+# T2-03 — install HealthGate smoke. Installs a good worker A, installs
+# a failstartup-tagged B that crashes before READY, and asserts the
+# supervisor's HealthGate rolls back to A, blacklists B with an
+# install-health-* reason, and clears the install-gate marker.
+update-health-smoke:
+	bash scripts/update-health-smoke.sh
 
 clean:
 	rm -rf bin/ dist/
