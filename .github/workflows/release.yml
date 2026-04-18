@@ -1,0 +1,120 @@
+name: Release
+
+# Cross-compile the ClawMast worker for every Tier 1 / Tier 2 target,
+# build and minisign-sign the update manifest, and publish both to a
+# GitHub Release whose assets match manifest.json's artefact URLs
+# exactly. Clients fetching
+#
+#   https://github.com/<org>/<repo>/releases/download/<tag>/manifest.json
+#
+# verify the signature against the minisign public key embedded in
+# their worker binary (internal/updater/devkey.pub — to be rotated to
+# a production key before the first user-facing release).
+#
+# The workflow is triggered by a `v*` tag push and by manual dispatch
+# for dry-run rehearsals.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build (e.g. v0.2.0). Must already exist on a commit in the repo."
+        required: true
+
+permissions:
+  contents: write  # required to create a release and upload assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build, sign, publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.tag.outputs.value }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Sanity — tests must pass on the tagged commit
+        run: go test ./...
+
+      - name: Build release tool
+        run: go build -o bin/clawmast-release ./cmd/clawmast-release
+
+      - name: Cross-compile worker tarballs
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          bin/clawmast-release build \
+            -out dist \
+            -version "${TAG}" \
+            -commit "${COMMIT::7}"
+          ls -la dist
+
+      - name: Generate manifest
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+          REPO: ${{ github.repository }}
+        run: |
+          bin/clawmast-release manifest \
+            -dir dist \
+            -out dist/manifest.json \
+            -channel stable \
+            -version "${TAG}" \
+            -base-url "https://github.com/${REPO}/releases/download/${TAG}" \
+            -notes "Automated release ${TAG}."
+          cat dist/manifest.json
+
+      - name: Sign manifest
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          if [[ -z "${MINISIGN_PRIVATE_KEY}" ]]; then
+            echo "::error::MINISIGN_PRIVATE_KEY secret is not set. Generate a keypair with 'clawmast-release keygen' and store the private key in repo Settings → Secrets → Actions."
+            exit 1
+          fi
+          keyfile=$(mktemp)
+          # Write private key without a trailing newline stripping artefact.
+          printf '%s' "${MINISIGN_PRIVATE_KEY}" > "${keyfile}"
+          bin/clawmast-release sign \
+            -key "${keyfile}" \
+            -in dist/manifest.json \
+            -out dist/manifest.json.minisig \
+            -comment "${TAG}"
+          rm -f "${keyfile}"
+          ls -la dist/manifest.json*
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.value, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/clawmast-*.tar.gz
+            dist/manifest.json
+            dist/manifest.json.minisig
