@@ -46,6 +46,14 @@ func main() {
 		if err := runSign(os.Args[2:]); err != nil {
 			fatal(err)
 		}
+	case "build":
+		if err := runBuild(os.Args[2:]); err != nil {
+			fatal(err)
+		}
+	case "manifest":
+		if err := runManifest(os.Args[2:]); err != nil {
+			fatal(err)
+		}
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -135,9 +143,17 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage: clawmast-release <subcommand> [flags]
 
 subcommands:
-  keygen -pub <file>               generate a fresh minisign keypair
-  sign   -key <privkey> -in <file> -out <sig> [-comment <str>]
+  keygen   -pub <file>
+                                   generate a fresh minisign keypair
+  sign     -key <privkey> -in <file> -out <sig> [-comment <str>]
                                    sign <file> with the given key
+  build    -version <vX.Y.Z> [-out dist] [-commit <sha>] [-platforms <list>]
+                                   cross-compile worker tarballs for the
+                                   release matrix
+  manifest -version <vX.Y.Z> -base-url <url> -out <path>
+                                   [-dir dist] [-channel stable] [-notes <str>]
+                                   build a manifest.json referencing the
+                                   tarballs under -dir
 
 The private key for keygen is printed to stdout; hold it in memory
 only. See architecture/refactor.md §10 decision #6 for key custody.
