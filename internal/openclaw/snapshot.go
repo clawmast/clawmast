@@ -1,0 +1,120 @@
+package openclaw
+
+import (
+	"sync"
+	"time"
+)
+
+// Snapshot is the in-memory summary of openclaw's latest state, as
+// observed by the most recent health probe. Fields are deliberately
+// flat JSON for direct wire exposure on /api/openclaw/status. All time
+// fields are UTC RFC 3339 strings; zero values are rendered as "".
+type Snapshot struct {
+	// Probed is true once the poller has written at least once. When
+	// false, the UI renders "checking..." rather than "down".
+	Probed bool `json:"probed"`
+	// Alive reflects whether the most recent `openclaw health --json`
+	// call succeeded and reported ok=true. This is the signal for the
+	// status badge dot.
+	Alive bool `json:"alive"`
+	// CLIMissing is true when the openclaw binary was not found on
+	// PATH. The UI renders an install-openclaw hint in that case and
+	// disables the Fix button (nothing to fix through).
+	CLIMissing bool `json:"cli_missing"`
+	// ProbeError carries the most recent failure reason (timeout,
+	// non-zero exit, parse error, ...) so the UI can render something
+	// more actionable than a silent red dot. Empty on success.
+	ProbeError string `json:"probe_error,omitempty"`
+	// LastProbeAt is when the most recent probe finished (success or
+	// failure). Used for "last checked 3s ago" copy.
+	LastProbeAt string `json:"last_probe_at,omitempty"`
+	// LastProbeMS is the spawn+parse duration in milliseconds, handy
+	// for diagnosing a slow gateway without reading logs.
+	LastProbeMS int64 `json:"last_probe_ms"`
+	// LastAliveAt records the last time we saw Alive=true. Not reset
+	// on subsequent failure so the UI can show "down for 2m".
+	LastAliveAt string `json:"last_alive_at,omitempty"`
+	// Health fields mirror the small subset of `openclaw health --json`
+	// that the dashboard actually renders today. Upstream adds fields
+	// (sessions, agents, channels, ...) freely; we only promise to
+	// expose a minimal set and pass through the raw payload for callers
+	// who want more.
+	HealthTS         int64  `json:"health_ts,omitempty"`
+	HealthDurationMS int64  `json:"health_duration_ms,omitempty"`
+	DefaultAgentID   string `json:"default_agent_id,omitempty"`
+	HeartbeatSeconds int    `json:"heartbeat_seconds,omitempty"`
+	SessionsCount    int    `json:"sessions_count"`
+	// ChannelCount is the number of configured channels. Zero is
+	// valid ("gateway up, no channels onboarded yet"), so the UI must
+	// not treat zero as an error.
+	ChannelCount int `json:"channel_count"`
+	// Intent records the user's last observed desire for the gateway's
+	// run state: "running" after start / restart / fix, "stopped"
+	// after stop. Doctor does not touch it (read-only). Empty on boot
+	// before any user action — treated as "running" by the UI so a
+	// fresh install with a broken gateway renders as 异常 (abnormal)
+	// rather than misleading the operator into thinking it was a
+	// deliberate stop.
+	//
+	// Intent is process-local; it does not persist across clawmast
+	// restarts. This is deliberate — cross-restart intent would need a
+	// disk write per click and still get stale the moment a sibling
+	// process (launchd, another operator) intervenes.
+	Intent Intent `json:"intent,omitempty"`
+}
+
+// Intent is the operator's stated desire for the gateway's run state.
+// Used to distinguish "已停止" (user stopped it) from "异常" (it crashed
+// or never came up) when the probe reports !alive. See Snapshot.Intent.
+type Intent string
+
+const (
+	IntentUnknown Intent = ""
+	IntentRunning Intent = "running"
+	IntentStopped Intent = "stopped"
+)
+
+// healthPayload matches the fields we care about in `openclaw health
+// --json`. Any field not listed here is ignored; we never roundtrip
+// unknown fields back to the UI (the wire shape is our stable API,
+// not openclaw's).
+type healthPayload struct {
+	OK               bool   `json:"ok"`
+	TS               int64  `json:"ts"`
+	DurationMS       int64  `json:"durationMs"`
+	DefaultAgentID   string `json:"defaultAgentId"`
+	HeartbeatSeconds int    `json:"heartbeatSeconds"`
+	Sessions         struct {
+		Count int `json:"count"`
+	} `json:"sessions"`
+	Channels map[string]any `json:"channels"`
+}
+
+// store holds the current Snapshot behind an RWMutex. All access goes
+// through Get/set so the poller's writes and the HTTP handler's reads
+// never share a mutable pointer.
+type store struct {
+	mu   sync.RWMutex
+	snap Snapshot
+}
+
+func (s *store) Get() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snap
+}
+
+func (s *store) set(mut func(*Snapshot)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mut(&s.snap)
+}
+
+// rfc3339 returns t.UTC().Format(time.RFC3339Nano) but returns "" on
+// the zero time so JSON omitempty can drop the field.
+func rfc3339(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
