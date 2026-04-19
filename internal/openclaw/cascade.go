@@ -14,9 +14,9 @@ import (
 type StepID string
 
 const (
-	StepDoctor        StepID = "t1-doctor"
+	StepDoctor         StepID = "t1-doctor"
 	StepGatewayRestart StepID = "t2-gateway-restart"
-	StepOSRestart     StepID = "t3-os-restart"
+	StepOSRestart      StepID = "t3-os-restart"
 )
 
 // StepOutcome is the result classification for one cascade step.
@@ -90,7 +90,8 @@ func Cascade(ctx context.Context, m *Manager, evCh chan<- StepEvent) {
 func runStep(ctx context.Context, m *Manager, evCh chan<- StepEvent, id StepID, timeout time.Duration, args []string) {
 	cmdStr := joinArgv(append([]string{"openclaw"}, args...))
 	evCh <- StepEvent{Step: id, Phase: "start", Command: cmdStr}
-	res, err := m.runner.runCmd(ctx, timeout, args...)
+	runner, _ := m.resolveRunner()
+	res, err := runner.runCmd(ctx, timeout, args...)
 	outcome := OutcomeOK
 	note := ""
 	if err != nil {

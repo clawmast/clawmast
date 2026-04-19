@@ -21,6 +21,16 @@ type Snapshot struct {
 	// PATH. The UI renders an install-openclaw hint in that case and
 	// disables the Fix button (nothing to fix through).
 	CLIMissing bool `json:"cli_missing"`
+	// BinaryPath is the absolute path of the openclaw executable the
+	// probe last ran (or would have run) — empty when discovery fell
+	// through to SourceNone. Exposed so the UI System card can render
+	// the exact copy being driven, which is surprisingly non-obvious
+	// on hosts that carry several Node toolchains side by side.
+	BinaryPath string `json:"binary_path,omitempty"`
+	// BinarySource labels the discovery strategy that produced
+	// BinaryPath (one of openclaw.DiscoverySource). The UI pairs this
+	// with BinaryPath to show "found via brew" / "found via fnm".
+	BinarySource string `json:"binary_source,omitempty"`
 	// ProbeError carries the most recent failure reason (timeout,
 	// non-zero exit, parse error, ...) so the UI can render something
 	// more actionable than a silent red dot. Empty on success.

@@ -30,6 +30,10 @@ type Manager struct {
 	store    *store
 	interval time.Duration
 	logger   *slog.Logger
+	// stateDir is consulted by Discover to read the operator override
+	// file. Empty means "no override lookup" — the rest of the
+	// discovery chain still works fine without it.
+	stateDir string
 }
 
 // NewManager constructs a Manager. A nil logger defaults to
@@ -51,14 +55,46 @@ func NewManager(runner Runner, interval time.Duration, logger *slog.Logger) *Man
 	}
 }
 
+// WithStateDir enables the <stateDir>/openclaw.path operator override.
+// Returns m so callers can chain at construction time. Passing an
+// empty string is a no-op (discovery falls back to env + PATH + bare
+// probes, which is the legacy behaviour).
+func (m *Manager) WithStateDir(stateDir string) *Manager {
+	m.stateDir = stateDir
+	return m
+}
+
+// resolveRunner copies m.runner and fills Binary via Discover when the
+// caller-supplied runner left it empty. Tests keep passing Runner with
+// an explicit Binary (fake shell scripts) and bypass discovery
+// entirely — the override check below preserves that path.
+func (m *Manager) resolveRunner() (Runner, Discovery) {
+	disc := Discovery{Source: SourceNone}
+	r := m.runner
+	if r.Binary != "" {
+		return r, disc
+	}
+	disc = Discover(m.stateDir)
+	if disc.Path != "" {
+		r.Binary = disc.Path
+	}
+	return r, disc
+}
+
 // Get returns the latest Snapshot. Safe for concurrent use; the
 // returned value is a copy.
 func (m *Manager) Get() Snapshot { return m.store.Get() }
 
-// Runner exposes the underlying Runner so callers (notably the Fix
+// Runner exposes the resolved Runner so callers (notably the Fix
 // handler) can spawn cascade commands against the same binary the
-// poller probes with. Returned by value.
-func (m *Manager) Runner() Runner { return m.runner }
+// poller probes with. The Binary field reflects whatever Discover
+// last resolved to, so external spawns do not re-run discovery and
+// cannot disagree with the poller about which openclaw to drive.
+// Returned by value.
+func (m *Manager) Runner() Runner {
+	r, _ := m.resolveRunner()
+	return r
+}
 
 // ProbeNow runs one synchronous probe and updates the store. Used by
 // the Fix handler to refresh state immediately after a recovery step
@@ -73,7 +109,14 @@ func (m *Manager) Runner() Runner { return m.runner }
 // current Intent and preserve that, not the Intent from prev.
 func (m *Manager) ProbeNow(ctx context.Context) Snapshot {
 	prev := m.store.Get()
-	next := probe(ctx, m.runner, prev)
+	runner, disc := m.resolveRunner()
+	next := probe(ctx, runner, prev)
+	// Surface the resolved binary on the wire regardless of probe
+	// outcome — "we looked but found nothing" is as useful to the UI
+	// as a successful resolution, and probe() cannot know the path
+	// without wiring discovery through its own signature.
+	next.BinaryPath = disc.Path
+	next.BinarySource = string(disc.Source)
 	m.store.set(func(s *Snapshot) {
 		intent := s.Intent
 		*s = next

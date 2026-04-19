@@ -79,7 +79,8 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("load update pubkey: %w", err)
 		}
-		tok, err := agent.LoadOrCreateToken(resolveStateDir(installRoot))
+		stateDir := resolveStateDir(installRoot)
+		tok, err := agent.LoadOrCreateToken(stateDir)
 		if err != nil {
 			return fmt.Errorf("bearer token: %w", err)
 		}
@@ -95,9 +96,8 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 				"path", tok.Path,
 				"fingerprint", tok.Fingerprint())
 		}
-		ocMgr := openclaw.NewManager(openclaw.Runner{}, 0, logger)
+		ocMgr := openclaw.NewManager(openclaw.Runner{}, 0, logger).WithStateDir(stateDir)
 		go ocMgr.Start(ctx)
-		stateDir := resolveStateDir(installRoot)
 		channel, channelSource := agent.ResolveChannel(
 			stateDir,
 			os.Getenv("CLAWMAST_UPDATE_CHANNEL"),

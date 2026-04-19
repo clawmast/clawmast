@@ -97,7 +97,8 @@ func RunAction(ctx context.Context, m *Manager, evCh chan<- StepEvent, a Action)
 	cmdStr := joinArgv(append([]string{"openclaw"}, argv...))
 	evCh <- StepEvent{Step: id, Phase: "start", Command: cmdStr}
 
-	res, err := m.runner.runCmd(ctx, actionTimeout(a), argv...)
+	runner, _ := m.resolveRunner()
+	res, err := runner.runCmd(ctx, actionTimeout(a), argv...)
 	outcome := OutcomeOK
 	note := ""
 	if err != nil {
