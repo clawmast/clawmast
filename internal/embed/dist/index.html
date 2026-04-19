@@ -100,17 +100,28 @@
                  prose. Rows hide before the first probe lands. -->
             <ul class="meta-list" id="openclaw-meta">
               <li class="meta-row health-row" id="openclaw-row-service">
-                <span class="meta-label">服务</span>
-                <span class="meta-value health-status">
-                  <span class="health-icon" data-state="unknown" aria-hidden="true"></span>
-                  <span class="health-text" id="openclaw-service-text">检测中</span>
-                </span>
+                <span class="health-icon" data-state="unknown" aria-hidden="true"></span>
+                <span class="meta-label">CLI</span>
+                <span class="meta-value" id="openclaw-service-text">检测中</span>
               </li>
+              <!-- Gateway row. The value is "未响应" / "运行中" / "已停止";
+                   when probe_error is present we also render a chevron
+                   button to the right, iOS-Settings-sub-screen style,
+                   that opens #gateway-dialog with structured diagnostic
+                   detail. No inline expansion, no <pre> dump in the card. -->
               <li class="meta-row health-row" id="openclaw-row-port">
-                <span class="meta-label">端口</span>
-                <span class="meta-value health-status">
-                  <span class="health-icon" data-state="unknown" aria-hidden="true"></span>
-                  <span class="health-text" id="openclaw-port-text">—</span>
+                <span class="health-icon" data-state="unknown" aria-hidden="true"></span>
+                <span class="meta-label">Gateway</span>
+                <span class="meta-value">
+                  <span id="openclaw-port-text">—</span>
+                  <button type="button" id="openclaw-gateway-more" class="meta-more" hidden
+                          aria-label="查看诊断详情" aria-haspopup="dialog">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="9 6 15 12 9 18"/>
+                    </svg>
+                  </button>
                 </span>
               </li>
               <li class="meta-row" id="openclaw-channels-row" hidden>
@@ -427,6 +438,31 @@
           <button type="submit" class="btn primary">保存并继续</button>
         </div>
         <p class="hint muted" id="token-error" hidden></p>
+      </form>
+    </dialog>
+
+    <!-- Gateway diagnostic dialog. Opened from the Gateway row chevron
+         when probe_error is non-empty. Structured info replaces the
+         previous inline <pre> dump — heading + key/value rows + error
+         block + copy affordance. Closed via ESC (native), backdrop
+         click, or the 关闭 button. -->
+    <dialog id="gateway-dialog" class="modal">
+      <form method="dialog" class="modal-body" id="gateway-form">
+        <h2>Gateway 诊断</h2>
+        <dl class="modal-kv" id="gateway-dialog-kv">
+          <dt>状态</dt>      <dd id="gateway-dialog-state">—</dd>
+          <dt>最后探测</dt>  <dd id="gateway-dialog-when">—</dd>
+          <dt>探测用时</dt>  <dd id="gateway-dialog-duration">—</dd>
+          <dt>探测命令</dt>  <dd class="mono small" id="gateway-dialog-cmd">GET http://127.0.0.1:18789/health</dd>
+        </dl>
+        <div class="modal-error-wrap" id="gateway-dialog-error-wrap" hidden>
+          <div class="modal-error-label">错误信息</div>
+          <pre class="modal-error" id="gateway-dialog-error"></pre>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="gateway-dialog-copy">复制日志</button>
+          <button type="submit" class="btn primary" id="gateway-dialog-close" value="close">关闭</button>
+        </div>
       </form>
     </dialog>
 

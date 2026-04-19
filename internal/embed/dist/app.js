@@ -32,6 +32,19 @@
   const openclawServiceText = $("openclaw-service-text");
   const openclawRowPort = $("openclaw-row-port");
   const openclawPortText = $("openclaw-port-text");
+  // Gateway diagnostic affordance. The chevron sits in the row; clicking
+  // opens #gateway-dialog populated from the latest snapshot. Replaces
+  // the prior inline <details>/<pre> dump so the card stays scannable
+  // and the raw error lives in a purposeful sub-screen.
+  const openclawGatewayMore = $("openclaw-gateway-more");
+  const gatewayDialog = $("gateway-dialog");
+  const gatewayDialogState = $("gateway-dialog-state");
+  const gatewayDialogWhen = $("gateway-dialog-when");
+  const gatewayDialogDuration = $("gateway-dialog-duration");
+  const gatewayDialogCmd = $("gateway-dialog-cmd");
+  const gatewayDialogErrorWrap = $("gateway-dialog-error-wrap");
+  const gatewayDialogError = $("gateway-dialog-error");
+  const gatewayDialogCopy = $("gateway-dialog-copy");
 
   // Destructive-action confirmation dialog.
   const confirmDialog = $("confirm-dialog");
@@ -254,7 +267,12 @@
   }
 
   function setOpenclawBadge(kind, text) {
-    openclawBadge.classList.remove("badge-unknown", "badge-healthy", "badge-error");
+    openclawBadge.classList.remove(
+      "badge-unknown",
+      "badge-healthy",
+      "badge-error",
+      "badge-pending",
+    );
     openclawBadge.classList.add(`badge-${kind}`);
     openclawBadgeText.textContent = text;
   }
@@ -323,25 +341,78 @@
     textEl.textContent = text;
   }
 
-  // shortErr condenses a probe_error (which may include a stacktrace
-  // or long CLI help output) to a single-line hint suitable for the
-  // port row. We don't try to parse openclaw's prose — just pick the
-  // first non-empty line and cap its width.
-  function shortErr(raw) {
-    if (!raw) return "";
-    const first = String(raw).split(/\r?\n/).find((l) => l.trim()) || "";
-    const trimmed = first.trim();
-    return trimmed.length > 80 ? trimmed.slice(0, 77) + "…" : trimmed;
+  // setGatewayRow is the specialised setter for the Gateway row. The
+  // row displays a short verdict word ("运行中" / "已停止" / "未响应" …).
+  // When `detail` is non-empty we reveal the chevron button and cache
+  // the drill-down payload in `gatewayDiag` so the dialog (opened from
+  // the chevron) can render structured probe info without re-fetching.
+  // `meta` carries the snapshot fields the dialog needs (probe_at,
+  // probe_ms); kept as a loose bag so callers don't have to thread the
+  // whole snapshot through.
+  let gatewayDiag = null;
+  function setGatewayRow(state, text, detail, meta) {
+    setHealthRow(openclawRowPort, openclawPortText, state, text);
+    if (!openclawGatewayMore) return;
+    const err = (detail || "").trim();
+    if (err) {
+      gatewayDiag = {
+        stateText: text,
+        probeAtISO: meta && meta.probeAtISO ? meta.probeAtISO : "",
+        probeMS: meta && meta.probeMS ? meta.probeMS : 0,
+        probeURL: meta && meta.probeURL ? meta.probeURL : "",
+        error: err,
+      };
+      openclawGatewayMore.hidden = false;
+    } else {
+      gatewayDiag = null;
+      openclawGatewayMore.hidden = true;
+    }
+  }
+
+  // gatewayEndpoint renders the "host:port" pair the probe actually
+  // uses, sourced from the snapshot's resolved address cache. Falls
+  // back to the documented default only when the backend resolver has
+  // not replied yet (first ~1 s after boot) — the seed the backend
+  // ships matches the fallback so the UI never reads "undefined:NaN".
+  function gatewayEndpoint(s) {
+    const host = (s && s.gateway_host) || "127.0.0.1";
+    const port = (s && s.gateway_port) || 18789;
+    return `${host}:${port}`;
+  }
+  function gatewayHealthURL(s) {
+    return `http://${gatewayEndpoint(s)}/health`;
+  }
+
+  // applyPendingState paints the optimistic "action in flight" look on
+  // the card — badge turns amber with a breathing dot, sub explains
+  // what's happening, Gateway row mirrors the badge. All four action
+  // buttons are already disabled by runAction(); we leave them that
+  // way. The pending state is cleared when renderOpenClaw runs with
+  // activeAction=null after the action stream closes.
+  function applyPendingState(name) {
+    const p = ACTION_PENDING[name];
+    if (!p) return;
+    setOpenclawBadge("pending", p.badge);
+    setOpenclawTone("warn");
+    setOpenclawSub(p.sub);
+    setGatewayRow("pending", p.row, "");
   }
 
   function renderOpenClaw(s) {
+    // Freeze the card while an action is streaming. The 1 s poller
+    // would otherwise repaint "异常" at the exact moment the gateway
+    // drops during a restart, only to flap back to "运行中" a second
+    // later. The sessions/channels/agent rows could safely update
+    // mid-flight but we freeze them too so the whole card reads as
+    // "mid-operation" rather than a half-updated mosaic.
+    if (activeAction) return;
     if (!s.probed) {
       setOpenclawBadge("unknown", "检测中");
       setActionState("unknown");
       setOpenclawTone(null);
       setOpenclawSub("连接本机 openclaw CLI 并探测网关状态");
       setHealthRow(openclawRowService, openclawServiceText, "unknown", "检测中");
-      setHealthRow(openclawRowPort, openclawPortText, "unknown", "—");
+      setGatewayRow("unknown", "检测中", "");
       return;
     }
     if (s.cli_missing) {
@@ -353,15 +424,19 @@
       openclawProbed.textContent = s.last_probe_at ? relStamp(s.last_probe_at) : "—";
       setOpenclawSub("未安装 openclaw CLI · 请按官方文档完成安装");
       setHealthRow(openclawRowService, openclawServiceText, "err", "openclaw CLI 未安装");
-      setHealthRow(openclawRowPort, openclawPortText, "off", "—");
+      setGatewayRow("off", "—", "");
       return;
     }
 
-    // Service row — we always know the CLI is available here (the
-    // cli_missing branch returned). Without a live service-status
-    // probe we can only assert "CLI 就绪"; the port row carries the
-    // runtime verdict.
-    setHealthRow(openclawRowService, openclawServiceText, "ok", "openclaw CLI 就绪");
+    // CLI row — we always know the binary is available here (the
+    // cli_missing branch returned). Surface the resolved path + the
+    // discovery source tag so operators can tell whether the brew
+    // copy, an env override, or an explicit state/openclaw-path is
+    // winning; the Gateway row below carries the runtime verdict.
+    const cliBits = [];
+    if (s.binary_path) cliBits.push(s.binary_path);
+    if (s.binary_source) cliBits.push(`(${s.binary_source})`);
+    setHealthRow(openclawRowService, openclawServiceText, "ok", cliBits.join(" ") || "已发现 openclaw");
 
     // Intent takes precedence over alive. After a stop click the
     // probe may briefly still see alive=true (service tearing down,
@@ -376,26 +451,31 @@
       setActionState("stopped");
       setOpenclawTone(null);
       setOpenclawSub("已手动停止 · 点击启动重新拉起");
-      setHealthRow(openclawRowPort, openclawPortText, "off", ":18789 已停止");
+      setGatewayRow("off", "已停止", "");
     } else if (s.alive) {
       setOpenclawBadge("healthy", "运行中");
       setActionState("online");
       setOpenclawTone(null);
       const bits = [];
       bits.push(s.version ? `v${s.version}` : "OpenClaw");
-      bits.push("127.0.0.1:18789");
+      bits.push(gatewayEndpoint(s));
       setOpenclawSub(bits.join(" · "));
-      setHealthRow(openclawRowPort, openclawPortText, "ok", ":18789 health 正常");
+      setGatewayRow("ok", "运行中", "");
     } else {
       // !alive with no explicit "stopped" intent = abnormal. Either it
       // crashed or it never came up; either way the operator should
-      // run 一键修复 or fall back to 启动.
+      // run 一键修复 or fall back to 启动. The raw probe_error is
+      // moved into the Gateway diagnostic dialog (chevron on the row),
+      // so the card surface stays a single word.
       setOpenclawBadge("error", "异常");
       setActionState("offline");
       setOpenclawTone("down");
       setOpenclawSub("点击一键修复,或使用启动按钮手动拉起");
-      const reason = shortErr(s.probe_error) || "gateway 未响应";
-      setHealthRow(openclawRowPort, openclawPortText, "err", `:18789 ${reason}`);
+      setGatewayRow("err", "未响应", s.probe_error || "", {
+        probeAtISO: s.last_probe_at,
+        probeMS: s.last_probe_ms,
+        probeURL: gatewayHealthURL(s),
+      });
     }
     lastSessionsCount = s.sessions_count || 0;
     openclawChannelsRow.hidden = !(s.channel_count || s.sessions_count);
@@ -439,6 +519,28 @@
   const ACTION_LABELS = {
     fix: "一键修复", start: "启动", stop: "停止", restart: "重启",
   };
+
+  // ACTION_PENDING drives the optimistic "in-flight" treatment that
+  // paints the card the instant a button is clicked — we do not wait
+  // for the backend probe to catch up. Without this, restart goes
+  // through a ~6 s window where the UI still says 运行中 until the
+  // gateway drops, then flaps to 异常, then back to 运行中 once the
+  // post-action probe confirms. With this, the card goes straight to
+  // 重启中 (amber, breathing dot) and renderOpenClaw is frozen until
+  // runAction's finally block clears activeAction.
+  const ACTION_PENDING = {
+    start:   { badge: "启动中",   sub: "正在启动 OpenClaw…",   row: "启动中…" },
+    stop:    { badge: "停止中",   sub: "正在停止 OpenClaw…",   row: "停止中…" },
+    restart: { badge: "重启中",   sub: "正在重启 OpenClaw…",   row: "重启中…" },
+    fix:     { badge: "修复中",   sub: "正在执行一键修复…",   row: "修复中…" },
+  };
+
+  // activeAction holds the name of the action currently streaming. When
+  // non-null, renderOpenClaw() early-returns — the pending UI stays
+  // put even as the 1 s status poll keeps running in the background.
+  // runAction() clears it in `finally` and then calls pollOpenClaw()
+  // to paint the post-action reality.
+  let activeAction = null;
 
   // Actions that interrupt active sessions prompt first. The copy
   // adapts to the current sessions_count so "1 个会话" vs "当前没有
@@ -572,6 +674,70 @@
     btn.addEventListener("click", () => runAction(btn.dataset.action));
   }
 
+  // Gateway diagnostic dialog. The chevron on the Gateway row opens it;
+  // Esc and backdrop close via native <dialog> semantics, and the form's
+  // submit button ("关闭") does the same without needing a JS handler.
+  // Copy button serialises the rendered key/values + raw error so the
+  // operator can paste them into a bug report.
+  function openGatewayDialog() {
+    if (!gatewayDialog || !gatewayDiag) return;
+    gatewayDialogState.textContent = gatewayDiag.stateText || "—";
+    gatewayDialogWhen.textContent = gatewayDiag.probeAtISO
+      ? relStamp(gatewayDiag.probeAtISO)
+      : "—";
+    gatewayDialogDuration.textContent = gatewayDiag.probeMS
+      ? `${gatewayDiag.probeMS} ms`
+      : "—";
+    // Show the actual HTTP URL we GET for liveness. The probe runs
+    // against the resolver-tracked host:port, so an operator who
+    // bumped the port in openclaw.json sees the new URL here within
+    // one address-refresh cycle rather than a stale hardcoded string.
+    if (gatewayDialogCmd) {
+      gatewayDialogCmd.textContent = gatewayDiag.probeURL
+        ? `GET ${gatewayDiag.probeURL}`
+        : "GET http://127.0.0.1:18789/health";
+    }
+    const err = gatewayDiag.error || "";
+    gatewayDialogErrorWrap.hidden = !err;
+    gatewayDialogError.textContent = err;
+    if (typeof gatewayDialog.showModal === "function") gatewayDialog.showModal();
+    else gatewayDialog.setAttribute("open", "");
+  }
+  if (openclawGatewayMore) {
+    openclawGatewayMore.addEventListener("click", openGatewayDialog);
+  }
+  if (gatewayDialogCopy) {
+    gatewayDialogCopy.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      const lines = [
+        `状态: ${gatewayDialogState.textContent}`,
+        `最后探测: ${gatewayDialogWhen.textContent}`,
+        `探测用时: ${gatewayDialogDuration.textContent}`,
+        `探测命令: ${gatewayDialogCmd.textContent}`,
+      ];
+      const err = gatewayDialogError.textContent.trim();
+      if (err) lines.push("", "错误信息:", err);
+      const payload = lines.join("\n");
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(payload);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = payload;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          ta.remove();
+        }
+        const prev = gatewayDialogCopy.textContent;
+        gatewayDialogCopy.textContent = "已复制";
+        setTimeout(() => { gatewayDialogCopy.textContent = prev; }, 1200);
+      } catch { /* clipboard denied; leave the label untouched */ }
+    });
+  }
+
   // Track the last rendered sessions_count so confirm copy reflects
   // the freshest known state without a synchronous probe at click time.
   let lastSessionsCount = 0;
@@ -603,6 +769,13 @@
     // the post-action probe refreshes the gateway state.
     for (const b of actionButtons) b.disabled = true;
     btn.dataset.loading = "1";
+
+    // Optimistic pending paint. Set activeAction before applying so
+    // renderOpenClaw (which may be mid-fetch from a concurrent poll
+    // tick) is frozen by the time the pending frame lands — no flicker
+    // between "运行中" and "重启中".
+    activeAction = name;
+    applyPendingState(name);
 
     const url = name === "fix"
       ? "/api/openclaw/fix"
@@ -636,9 +809,15 @@
       // Leave the drawer expanded on completion so the user can scan
       // the final output; they collapse it themselves when done.
       setConsoleState("expanded");
-      // ProbeNow on the backend keeps the 5s status poll cheap; we
-      // still kick one off here so the button row and sub update
-      // immediately after stream close.
+      // Clear the pending gate BEFORE pollOpenClaw so the next snapshot
+      // re-paints the card with real probe state (alive / probe_error
+      // etc). Order matters: flipping activeAction after pollOpenClaw
+      // would leave the last pending frame visible until the next 1 s
+      // poll tick.
+      activeAction = null;
+      // ProbeNow on the backend keeps the status poll cheap; we still
+      // kick one off here so the button row and sub update immediately
+      // after stream close.
       pollOpenClaw();
     }
   }

@@ -303,60 +303,141 @@ body {
   margin: 0;
   padding: 4px 0;
 }
+/* Desktop meta-list row — a 3-column grid (icon | label | value).
+   Every row reserves the icon column so labels line up across
+   health rows and plain metadata rows. Rows without a status
+   (渠道 · 会话, 上次探测, ...) simply omit the .health-icon
+   element and the column stays visually empty.
+   align-items: start + an icon margin-top keep the dot aligned
+   with the first line of the label/value when the value wraps
+   onto multiple lines (e.g. a long Gateway probe error). */
 .meta-row {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px;
-  padding: 10px 16px;
-  min-height: 36px;
+  display: grid;
+  grid-template-columns: 20px 96px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: start;
+  padding: 12px 16px;
+  min-height: 44px; /* iOS HIG minimum touch target */
   border-bottom: 1px solid var(--border);
 }
 .meta-row:last-child { border-bottom: none; }
+.meta-row > .health-icon { grid-column: 1; }
+.meta-row > .meta-label  { grid-column: 2; }
+.meta-row > .meta-value  { grid-column: 3; }
 .meta-label {
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--text-muted);
-  flex-shrink: 0;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 .meta-value {
   font-size: 13px;
+  line-height: 1.4;
   font-family: var(--font-mono);
   color: var(--text);
   overflow-wrap: anywhere;
+  /* iOS/macOS Settings convention: label left, value flushed right. */
   text-align: right;
+  justify-self: end;
+  min-width: 0;
 }
 
-/* ── Structured health rows ─────────────────────────────────────
-   Each row on the OpenClaw card surfaces one verdict (service,
-   port, config, ...). The icon is a small square that carries the
-   tone via data-state; the text sits next to it in the same
-   monospace value column so the list still reads as "label →
-   value" even when the value is a glyph. */
-.health-status {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
+/* ── Status dot — macOS / iOS NSStatusIndicator family ────────
+   The .health-icon element is a flex container sized to exactly
+   one text-line (13px × 1.4 line-height = 18.2px) and a 10px
+   coloured disc lives inside it as a ::before. Because the
+   container is the height of a single line and the disc is
+   centred inside it, the dot visually aligns with the middle of
+   the first line of the label/value no matter how many lines
+   the value wraps onto. Colour alone carries OK / WARN / ERR,
+   with the value column's text colour reinforcing the verdict
+   for colour-blind users. An `unknown` dot stays hollow (hair-
+   line ring + transparent fill) so the row doesn't "claim" a
+   verdict before the first probe lands. */
 .health-icon {
-  width: 14px; height: 14px;
-  border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px;
+  height: calc(13px * 1.4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  color: #000;
-  font-size: 10px; font-weight: 700; line-height: 1;
 }
-.health-icon[data-state="ok"]   { background: var(--ok, #2ea043); }
-.health-icon[data-state="err"]  { background: var(--err, #f85149); }
-.health-icon[data-state="warn"] { background: var(--warn, #d29922); }
-.health-icon[data-state="unknown"],
-.health-icon[data-state="off"]  { background: var(--border-2); }
-.health-icon[data-state="ok"]::before   { content: "\2713"; }
-.health-icon[data-state="err"]::before  { content: "\2715"; }
-.health-icon[data-state="warn"]::before { content: "!"; }
-.health-icon[data-state="off"]::before,
-.health-icon[data-state="unknown"]::before { content: "\2013"; color: var(--text-dim); }
-.health-text { color: var(--text); }
-.health-row[data-state="err"]  .health-text { color: var(--err, #f85149); }
-.health-row[data-state="warn"] .health-text { color: var(--warn, #d29922); }
-.health-row[data-state="off"]  .health-text { color: var(--text-muted); }
+.health-icon::before {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.health-icon[data-state="ok"]   { color: var(--ok, #2ea043); }
+.health-icon[data-state="err"]  { color: var(--err, #f85149); }
+.health-icon[data-state="warn"] { color: var(--warn, #d29922); }
+.health-icon[data-state="off"]  { color: var(--text-dim); }
+.health-icon[data-state="unknown"] { color: transparent; }
+.health-icon[data-state="unknown"]::before {
+  box-shadow: inset 0 0 0 1.5px var(--border-2);
+}
+
+.health-row[data-state="err"]  .meta-value { color: var(--err, #f85149); }
+.health-row[data-state="warn"] .meta-value { color: var(--warn, #d29922); }
+.health-row[data-state="off"]  .meta-value { color: var(--text-muted); }
+
+/* ── Inline expandable detail (native <details>) ──────────────
+   The Gateway row shows a one-word verdict plus an optional
+   "详情" disclosure. Using <details>/<summary> keeps the expand
+   interaction free of JavaScript and works identically on PC
+   (click) and iOS Safari (tap). We strip the default disclosure
+   triangle (Chrome's ▶, Safari's ▸) and draw our own caret so
+   the glyph rotates in sync across browsers. */
+/* Chevron button in a .meta-value. iOS Settings sub-screen cue —
+   tap opens a dialog with structured detail. The chevron sits flush
+   right of the value text with a hairline of gap; 24px tap target
+   via padding keeps the button accessible without visually dominating
+   the row. Hidden by default; JS reveals when the row has something
+   to drill into (e.g. probe_error). */
+.meta-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin-left: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim, var(--text-muted));
+  cursor: pointer;
+  vertical-align: middle;
+  transition: color 120ms ease, background 120ms ease;
+}
+.meta-more:hover { color: var(--text); background: var(--surface-2, rgba(255,255,255,0.06)); }
+.meta-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.meta-more[hidden] { display: none; }
+
+/* Narrow viewports (iPhone portrait, small iPad split view):
+   label sits above value in column 2; the dot stays in column
+   1 on row 1 so it aligns with the label. Value indents under
+   the label (also column 2) so the leading is consistent. Keeps
+   a 44px touch target via padding. */
+@media (max-width: 599px) {
+  .meta-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    row-gap: 2px;
+  }
+  .meta-row > .health-icon { grid-column: 1; grid-row: 1; }
+  .meta-row > .meta-label  { grid-column: 2; grid-row: 1; }
+  .meta-row > .meta-value  {
+    grid-column: 2; grid-row: 2;
+    /* Stacked layout reads label→value top-to-bottom; keep both
+       flush-left so the leading edge stays consistent. */
+    text-align: left;
+    justify-self: start;
+  }
+}
 
 .oc-card .banner { margin: 12px 16px 0; }
 
@@ -449,6 +530,18 @@ body {
 .badge-error   { background: var(--error-dim);   color: var(--error); }
 .badge-warn    { background: var(--warning-dim); color: var(--warning); }
 .badge-unknown { background: var(--surface-2); color: var(--text-dim); }
+/* badge-pending: the optimistic state applied the instant an action
+   button is clicked, before the backend probe can confirm. Visually a
+   muted amber with a breathing dot so the operator can tell the UI is
+   in the middle of a handoff rather than genuinely unknown. */
+.badge-pending { background: var(--warning-dim); color: var(--warning); }
+.badge-pending .dot { animation: pulse-dot 1.1s ease-in-out infinite; }
+
+/* Gateway row pending state: dim amber dot to match the badge while the
+   action streams. Ends when activeAction clears and the next probe
+   snapshot lands. */
+.health-icon[data-state="pending"] { color: var(--warn, #d29922); }
+.health-icon[data-state="pending"]::before { animation: pulse-dot 1.1s ease-in-out infinite; }
 
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
@@ -779,6 +872,75 @@ body {
 }
 .modal-body input[type="password"]:focus { outline: none; border-color: var(--accent); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.modal-actions .btn + .btn { margin-left: 0; }
+
+/* Structured key/value list inside a modal. Used by the Gateway
+   diagnostic dialog. Two columns: label (muted, left) + value
+   (right-aligned on desktop, stacks on mobile). Matches the iOS
+   Settings detail-screen visual rhythm. */
+.modal-kv {
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 16px;
+  row-gap: 8px;
+  font-size: 13px;
+}
+.modal-kv > dt {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.modal-kv > dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.modal-kv > dd.mono { font-family: var(--font-mono); }
+
+/* Error block inside the diagnostic modal. Distinct from ad-hoc
+   <pre> — gets a label and a bordered container so it reads as
+   "here's the raw probe output" rather than an unstyled code dump. */
+.modal-error-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.modal-error-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.modal-error {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--err, #f85149);
+  background: rgba(248, 81, 73, 0.06);
+  border: 1px solid rgba(248, 81, 73, 0.2);
+  border-radius: var(--radius, 8px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+}
+/* Left-align the space-between action row when the modal carries
+   both a secondary (复制日志) and a primary (关闭) button. Default
+   modal-actions right-aligns; the diagnostic dialog wants the
+   secondary action on the far left so copy is discoverable. */
+#gateway-form .modal-actions { justify-content: space-between; }
+
+/* Narrow viewport: kv stacks so 'label' sits above 'value'.
+   Still easier to scan than a right-aligned dd that gets clipped
+   on a 360px viewport. */
+@media (max-width: 479px) {
+  .modal-kv { grid-template-columns: 1fr; row-gap: 10px; }
+  .modal-kv > dt { font-size: 11px; }
+  .modal-kv > dd { text-align: left; }
+}
 
 /* ── Footer ────────────────────────────────────────────────────── */
 .foot {
