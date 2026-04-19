@@ -70,6 +70,19 @@ The implication for contributors:
 
 Windows parity (supervisor, auto-update, tray) is deferred until after v1.0.0.
 
+### R6. Push policy
+
+Local commits stay local until one of these triggers fires:
+
+- a tag is being cut for release (e.g. `vX.Y.Z`)
+- a workflow that consumes the remote (auto-update smoke, release-pipeline
+  dry run, cross-machine smoke) needs the commit on GitHub
+- the maintainer explicitly asks to push
+
+Otherwise, leave the branch ahead of origin. Do not offer to push "to be
+safe" — the maintainer prefers a quiet working tree and audits the
+unpushed log before pushing in a batch.
+
 ## How to propose a rule change
 
 Open a PR that edits this file and explains the rationale in the description.
