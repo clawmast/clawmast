@@ -96,12 +96,13 @@ type Config struct {
 	StateDir string
 }
 
-// DefaultAddr now binds on all interfaces so a Mac mini on a LAN can
-// be reached from the operator's laptop without an SSH tunnel. The
-// bearer-token middleware enforces that unauthenticated remote
-// requests are rejected; loopback clients remain exempt to keep the
-// local dashboard zero-config.
-const DefaultAddr = "0.0.0.0:17080"
+// DefaultAddr binds on loopback so the first-run experience on macOS
+// never triggers the Application Firewall prompt ("allow clawmastd to
+// accept incoming network connections"). The bearer-token middleware
+// is still enforced for any non-loopback client so opting in to LAN
+// access remains safe: operators who want a Mac mini reachable from a
+// laptop export CLAWMAST_HTTP_ADDR=0.0.0.0:17080 in the launchd plist.
+const DefaultAddr = "127.0.0.1:17080"
 
 // Server owns the embedded mux and the net.Listener. It is safe to
 // call Start exactly once.
