@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
 	"time"
 
@@ -163,7 +164,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/openclaw/fix", s.handleOpenclawFix)
 	s.mux.HandleFunc("POST /api/openclaw/action", s.handleOpenclawAction)
 
-	uiFS, err := fs.Sub(embed.Assets, "dist")
+	uiHandler, err := s.buildUIHandler()
 	if err != nil {
 		s.log.Warn("embed: failed to open web/dist, UI disabled", "err", err)
 		s.mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -171,7 +172,35 @@ func (s *Server) routes() {
 		}))
 		return
 	}
-	s.mux.Handle("GET /", http.FileServerFS(uiFS))
+	s.mux.Handle("GET /", uiHandler)
+}
+
+// buildUIHandler returns the http.Handler that serves the worker UI.
+// By default it serves from the go:embed FS baked into the binary at
+// compile time. When the operator exports CLAWMAST_DEV_DIST_DIR (for
+// local UI iteration without rebuild+reinstall), we serve that
+// directory directly off disk with Cache-Control: no-store so every
+// browser refresh picks up the latest edits. The env var must point
+// at an existing directory; anything else falls back to the embedded
+// FS so production deployments can't accidentally serve broken paths
+// if the variable leaks into a launchd plist.
+func (s *Server) buildUIHandler() (http.Handler, error) {
+	if dir := os.Getenv("CLAWMAST_DEV_DIST_DIR"); dir != "" {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			s.log.Warn("ui: dev mode — serving from disk", "dir", dir)
+			fileServer := http.FileServerFS(os.DirFS(dir))
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Cache-Control", "no-store, must-revalidate")
+				fileServer.ServeHTTP(w, r)
+			}), nil
+		}
+		s.log.Warn("ui: CLAWMAST_DEV_DIST_DIR set but unusable; falling back to embedded FS", "dir", dir)
+	}
+	uiFS, err := fs.Sub(embed.Assets, "dist")
+	if err != nil {
+		return nil, err
+	}
+	return http.FileServerFS(uiFS), nil
 }
 
 // publicHandler returns the mux wrapped in the bearer middleware when

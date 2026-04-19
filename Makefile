@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install uninstall install-smoke cli-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill playground-up playground-down playground-status playground-publish playground-nuke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install uninstall install-smoke cli-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill dev playground-up playground-down playground-status playground-publish playground-nuke clean
 
 build: build-worker build-supervisor build-release
 
@@ -129,6 +129,14 @@ release-smoke:
 # graceful SIGTERM on clawmastd.
 supervisor-drill:
 	bash scripts/supervisor-drill.sh
+
+# UI iteration mode. Stops the installed launchd/systemd daemon,
+# runs the worker in the foreground with CLAWMAST_DEV_DIST_DIR so
+# edits under internal/embed/dist/ are served live off disk. On
+# Ctrl+C the installed daemon is restored. Go code changes still
+# need a manual restart of the dev worker.
+dev:
+	bash scripts/dev.sh
 
 # Auto-update playground — persistent local environment for clicking
 # through the update flow in a real browser. See scripts/playground.sh
