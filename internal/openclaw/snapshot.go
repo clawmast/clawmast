@@ -71,6 +71,27 @@ type Snapshot struct {
 	// disk write per click and still get stale the moment a sibling
 	// process (launchd, another operator) intervenes.
 	Intent Intent `json:"intent,omitempty"`
+
+	// LastEnrichedAt is the RFC 3339 timestamp of the most recent CLI
+	// enrichment (`openclaw health --json`) that succeeded. Used by
+	// probe() to throttle the slow CLI spawn: liveness is driven by the
+	// gateway's own HTTP /health endpoint (~10 ms) on every tick, while
+	// the CLI only runs on state transitions or when this cache ages
+	// past EnrichmentInterval. Not on the wire — purely a rate-limiting
+	// bookkeeping field that lives on the in-memory Snapshot.
+	LastEnrichedAt string `json:"-"`
+
+	// Gateway* fields surface the resolved listen address — where we
+	// actually sent the /health probe this tick. Populated from the
+	// shared GatewayAddress cache (gateway_addr.go) so the UI can show
+	// the live port instead of hardcoding 127.0.0.1:18789 and so an
+	// operator who bumps the port via openclaw.json or `openclaw
+	// gateway --port NNN` sees the dashboard pick it up after the next
+	// resolver refresh (≤ AddressRefreshInterval, 5 min today).
+	GatewayHost         string `json:"gateway_host,omitempty"`
+	GatewayPort         int    `json:"gateway_port,omitempty"`
+	GatewayPortSource   string `json:"gateway_port_source,omitempty"`
+	GatewayAddrResolved string `json:"gateway_addr_resolved_at,omitempty"`
 }
 
 // Intent is the operator's stated desire for the gateway's run state.

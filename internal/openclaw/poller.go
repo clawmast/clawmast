@@ -7,16 +7,17 @@ import (
 )
 
 // ActivePollInterval is the cadence used when the gateway is alive.
-// 3s catches an unresponsive / crashed gateway quickly (the badge goes
-// stale for at most one tick) at the cost of one extra CLI spawn per
-// 2s compared to the old 5s.
-const ActivePollInterval = 3 * time.Second
+// Each tick hits the gateway's own HTTP /health endpoint (~10 ms), so
+// the budget is dominated by latency rather than spawn cost. One second
+// is tight enough that the UI reacts within a tick of a crash while
+// still staying well under the /health handler's single-digit-ms cost.
+const ActivePollInterval = 1 * time.Second
 
 // IdlePollInterval is the cadence used when the gateway is not alive
-// (crashed, deliberately stopped, or CLI missing). Once down, probing
-// every 3s adds no signal — the operator has to take action — so we
-// back off to keep Node spawn noise low.
-const IdlePollInterval = 5 * time.Second
+// (crashed, deliberately stopped, or CLI missing). The HTTP liveness
+// probe is cheap and the recovery window matters more here than the
+// baseline load, so we only back off to 2s.
+const IdlePollInterval = 2 * time.Second
 
 // DefaultPollInterval is kept as an alias for callers that passed it
 // explicitly. New code should rely on the adaptive behaviour.
@@ -139,7 +140,17 @@ func (m *Manager) SetIntent(intent Intent) {
 // second of boot, then schedules the next probe adaptively: the
 // configured interval (default 3s) while alive, IdlePollInterval (5s)
 // while not. Start blocks; callers launch it in a goroutine.
+//
+// A second goroutine resolves the gateway address from
+// `openclaw gateway status --json` and refreshes it every
+// AddressRefreshInterval. The resolver is decoupled from the probe
+// loop because Node spawn cost (~2–3 s) must not block the 1-second
+// liveness cadence. The first resolution races with the first probe:
+// until it lands, probes hit the historical default
+// DefaultGatewayHost:DefaultGatewayPort, which is correct for every
+// out-of-the-box install.
 func (m *Manager) Start(ctx context.Context) {
+	go m.runAddressResolver(ctx)
 	m.ProbeNow(ctx)
 	for {
 		d := m.interval
@@ -153,4 +164,41 @@ func (m *Manager) Start(ctx context.Context) {
 			m.ProbeNow(ctx)
 		}
 	}
+}
+
+// runAddressResolver keeps the shared gateway-address cache current.
+// Runs one resolution immediately (so a port override lands before
+// the second probe tick) and then re-resolves every
+// AddressRefreshInterval. Errors are logged at debug — a failed
+// resolution leaves the previous (or seed) address serving probes,
+// which is the correct fail-soft behaviour.
+func (m *Manager) runAddressResolver(ctx context.Context) {
+	m.resolveOnce(ctx)
+	t := time.NewTicker(AddressRefreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.resolveOnce(ctx)
+		}
+	}
+}
+
+func (m *Manager) resolveOnce(ctx context.Context) {
+	runner, _ := m.resolveRunner()
+	if runner.Binary == "" {
+		return
+	}
+	addr, err := ResolveGatewayAddress(ctx, runner)
+	if err != nil {
+		m.logger.Debug("openclaw: gateway address resolve failed",
+			slog.String("err", err.Error()))
+		return
+	}
+	m.logger.Debug("openclaw: gateway address resolved",
+		slog.String("host", addr.Host),
+		slog.Int("port", addr.Port),
+		slog.String("source", addr.Source))
 }
