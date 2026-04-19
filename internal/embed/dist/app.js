@@ -60,12 +60,26 @@
   const settingsVersion = $("settings-version");
   const settingsBuild = $("settings-build");
   const settingsFull = $("settings-full");
-  const settingsChannel = $("settings-channel");
   const settingsLatest = $("settings-latest");
   const settingsUpdateNote = $("settings-update-note");
   const settingsCheck = $("settings-check");
   const settingsInstall = $("settings-install");
   const settingsUpdateDot = $("settings-update-dot");
+
+  // System card (sibling of the version/update card).
+  const sysWorker = $("sys-worker");
+  const sysWorkerBuild = $("sys-worker-build");
+  const sysSupervisor = $("sys-supervisor");
+  const sysSupervisorNote = $("sys-supervisor-note");
+  const sysInstallRoot = $("sys-install-root");
+  const sysUptime = $("sys-uptime");
+
+  // Channel picker (segmented control + confirm dialog).
+  const channelButtons = document.querySelectorAll(".seg-btn[data-channel]");
+  const channelNote = $("channel-note");
+  const channelDialog = $("channel-dialog");
+  const channelForm = $("channel-form");
+  const channelCancel = $("channel-cancel");
 
   const rtf = new Intl.RelativeTimeFormat("zh-Hans", { numeric: "auto" });
   const tfmt = new Intl.DateTimeFormat("zh-Hans", {
@@ -183,10 +197,24 @@
       settingsVersion.textContent = label;
       settingsBuild.textContent = `${v.commit || "none"} · ${v.build_time || "unknown"}`;
       settingsFull.textContent = v.full || "";
+
+      // System card.
+      sysWorker.textContent = label;
+      sysWorkerBuild.textContent = v.full || "";
+      if (v.supervisor_version) {
+        sysSupervisor.textContent = v.supervisor_version.split(" ")[0] || v.supervisor_version;
+        sysSupervisorNote.textContent = v.supervisor_version;
+        sysSupervisorNote.classList.remove("warn");
+      } else {
+        sysSupervisor.textContent = "未检测到";
+        sysSupervisorNote.textContent = "worker 以独立模式运行 — 没有 clawmastd 在监管崩溃与自动更新。";
+      }
+      sysInstallRoot.textContent = v.install_root || "(独立模式)";
     } catch (err) {
       footerVersion.textContent = "加载失败";
       settingsVersion.textContent = "加载失败";
       settingsBuild.textContent = String(err.message || err);
+      sysWorker.textContent = "加载失败";
     }
   }
 
@@ -195,9 +223,11 @@
       const h = await jfetch("/api/health");
       setStatus(h.ok ? "healthy" : "error", h.ok ? "运行中" : "异常");
       footerUptime.textContent = `uptime ${fmtUptime(h.uptime_ms)}`;
+      if (sysUptime) sysUptime.textContent = fmtUptime(h.uptime_ms);
     } catch (err) {
       setStatus("error", "无法连接");
       footerUptime.textContent = "—";
+      if (sysUptime) sysUptime.textContent = "—";
     }
   }
 
@@ -666,7 +696,7 @@
   }
 
   function renderSettingsUpdate(u) {
-    if (u.channel) settingsChannel.textContent = u.channel;
+    if (u.channel) setChannelActive(u.channel);
     let note = "";
     let canInstall = false;
     if (u.source === "signed-manifest") {
@@ -727,6 +757,101 @@
     }
   }
 
+  // --- Channel picker --------------------------------------------------
+  //
+  // The segmented control reflects the *active* channel (what
+  // /api/updates/check used on the last round-trip). When the user
+  // picks a different channel we POST /api/settings/channel with
+  // restart:true so the supervisor respawns the worker and the new
+  // pick takes effect without a page reload. Beta requires a second
+  // confirm because it opts into pre-stable builds.
+  let channelActive = "stable";
+  let channelBusy = false;
+  function setChannelActive(name) {
+    channelActive = name || "stable";
+    for (const btn of channelButtons) {
+      const on = btn.dataset.channel === channelActive;
+      btn.setAttribute("aria-checked", on ? "true" : "false");
+    }
+  }
+  async function loadChannel() {
+    try {
+      const c = await jfetch("/api/settings/channel");
+      setChannelActive(c.active || "stable");
+      if (c.preference && c.preference !== c.active) {
+        channelNote.textContent = `已保存偏好:${c.preference};下次重启生效。`;
+      } else if (c.active === "beta") {
+        channelNote.textContent = "测试版可能包含未稳定的改动;失败时会自动回滚。";
+      } else {
+        channelNote.textContent = "稳定版,推荐保持。";
+      }
+    } catch (err) {
+      channelNote.textContent = `加载失败:${err.message || err}`;
+    }
+  }
+  async function setChannel(target) {
+    if (channelBusy || target === channelActive) return;
+    if (target === "beta") {
+      const ok = await promptChannelBeta();
+      if (!ok) return;
+    }
+    channelBusy = true;
+    for (const btn of channelButtons) btn.disabled = true;
+    channelNote.textContent = `切换到 ${target}…`;
+    try {
+      const res = await fetch("/api/settings/channel", withAuth({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: target, restart: true }),
+      }));
+      const payload = await res.json();
+      if (!res.ok) {
+        channelNote.textContent = `切换失败:${payload.error || res.status}`;
+        return;
+      }
+      if (payload.restart_requested) {
+        channelNote.textContent =
+          `已保存 ${payload.preference};worker 正在重启以切换到 ${payload.preference}。`;
+        setStatus("error", "即将重启…");
+      } else {
+        channelNote.textContent = `已保存 ${payload.preference}。`;
+      }
+    } catch (err) {
+      channelNote.textContent = `请求失败:${err.message || err}`;
+    } finally {
+      channelBusy = false;
+      for (const btn of channelButtons) btn.disabled = false;
+    }
+  }
+  function promptChannelBeta() {
+    return new Promise((resolve) => {
+      const onSubmit = (ev) => {
+        ev.preventDefault();
+        cleanup();
+        if (typeof channelDialog.close === "function") channelDialog.close();
+        else channelDialog.removeAttribute("open");
+        resolve(true);
+      };
+      const onCancel = () => {
+        cleanup();
+        if (typeof channelDialog.close === "function") channelDialog.close();
+        else channelDialog.removeAttribute("open");
+        resolve(false);
+      };
+      const cleanup = () => {
+        channelForm.removeEventListener("submit", onSubmit);
+        channelCancel.removeEventListener("click", onCancel);
+      };
+      channelForm.addEventListener("submit", onSubmit);
+      channelCancel.addEventListener("click", onCancel);
+      if (typeof channelDialog.showModal === "function") channelDialog.showModal();
+      else channelDialog.setAttribute("open", "");
+    });
+  }
+  for (const btn of channelButtons) {
+    btn.addEventListener("click", () => setChannel(btn.dataset.channel));
+  }
+
   // --- Hash-based SPA router -------------------------------------------
   //
   // The legacy Next.js app routed /dashboard, /terminal, /logs, /settings
@@ -762,6 +887,7 @@
   // intervention; subsequent checks happen on demand from the Settings
   // button (24h auto-recheck lands with v0.2 supervisor persistence).
   loadVersion();
+  loadChannel();
   poll();
   pollOpenClaw();
   runSettingsCheck().catch(() => {});

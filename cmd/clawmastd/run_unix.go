@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/clawmast/clawmast/internal/supervisor"
+	"github.com/clawmast/clawmast/internal/version"
 )
 
 // run drives the supervisor state machine against the install root
@@ -28,6 +29,12 @@ func run(ctx context.Context, opts options) error {
 		StartTimeout:  parseDurationEnv("CLAWMAST_START_TIMEOUT", logger),
 		GateWindow:    parseDurationEnv("CLAWMAST_GATE_WINDOW", logger),
 		GateStableFor: parseDurationEnv("CLAWMAST_GATE_STABLE_FOR", logger),
+		// Propagate the supervisor's own build string to the worker
+		// so /api/version can expose it as supervisor_version without
+		// an extra IPC. The worker inherits os.Environ() via spawn,
+		// and ExtraEnv is the documented hook for supervisor-provided
+		// context variables.
+		ExtraEnv: []string{"CLAWMAST_SUPERVISOR_VERSION=" + version.Full()},
 	}
 	sup, err := supervisor.New(cfg)
 	if err != nil {

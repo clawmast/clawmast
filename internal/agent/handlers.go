@@ -32,6 +32,20 @@ type VersionResponse struct {
 	BuildTime string `json:"build_time"`
 	GoVersion string `json:"go_version"`
 	Full      string `json:"full"`
+	// SupervisorVersion is the clawmastd build string propagated via
+	// CLAWMAST_SUPERVISOR_VERSION at spawn. Empty when the worker runs
+	// standalone (no supervisor in the loop); the UI renders this as
+	// "监工 —" so the operator can tell supervised from bare runs.
+	SupervisorVersion string `json:"supervisor_version,omitempty"`
+	// InstallRoot is the <root> the worker is resolving supervisor-
+	// scoped state against. Empty in standalone mode. Exposed so the
+	// dashboard can show a single "系统" card without a second endpoint.
+	InstallRoot string `json:"install_root,omitempty"`
+	// Channel is the effective update channel for this worker boot
+	// (preference file > env > default). Mirrors /api/updates/check's
+	// Channel field; duplicated here so the UI can render the system
+	// card without forcing an updater round-trip.
+	Channel string `json:"channel,omitempty"`
 }
 
 // HealthResponse is the payload of GET /api/health. The embedded UI
@@ -81,12 +95,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, VersionResponse{
-		Version:   version.Version,
-		Label:     currentVersionLabel(),
-		Commit:    version.Commit,
-		BuildTime: version.BuildTime,
-		GoVersion: goVersion,
-		Full:      version.Full(),
+		Version:           version.Version,
+		Label:             currentVersionLabel(),
+		Commit:            version.Commit,
+		BuildTime:         version.BuildTime,
+		GoVersion:         goVersion,
+		Full:              version.Full(),
+		SupervisorVersion: s.cfg.SupervisorVersion,
+		InstallRoot:       s.cfg.InstallRoot,
+		Channel:           s.cfg.UpdateChannel,
 	})
 }
 

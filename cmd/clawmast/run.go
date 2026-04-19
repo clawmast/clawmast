@@ -97,10 +97,21 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 		}
 		ocMgr := openclaw.NewManager(openclaw.Runner{}, 0, logger)
 		go ocMgr.Start(ctx)
+		stateDir := resolveStateDir(installRoot)
+		channel, channelSource := agent.ResolveChannel(
+			stateDir,
+			os.Getenv("CLAWMAST_UPDATE_CHANNEL"),
+			agent.ChannelStable,
+		)
+		logger.Info("update channel resolved",
+			"component", "agent",
+			"channel", channel,
+			"source", channelSource)
 		srv = agent.NewServer(agent.Config{
 			Addr:        httpAddr,
 			Logger:      logger,
 			InstallRoot: installRoot,
+			StateDir:    stateDir,
 			RequestRollback: func() {
 				select {
 				case rollbackCh <- struct{}{}:
@@ -113,11 +124,12 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 				default:
 				}
 			},
-			UpdateBaseURL: envOr("CLAWMAST_UPDATE_URL", ""),
-			UpdateChannel: envOr("CLAWMAST_UPDATE_CHANNEL", "stable"),
-			UpdatePubKey:  pubKey,
-			OpenClaw:      ocMgr,
-			Token:         tok,
+			UpdateBaseURL:     envOr("CLAWMAST_UPDATE_URL", ""),
+			UpdateChannel:     channel,
+			UpdatePubKey:      pubKey,
+			OpenClaw:          ocMgr,
+			Token:             tok,
+			SupervisorVersion: os.Getenv("CLAWMAST_SUPERVISOR_VERSION"),
 		})
 		go func() { httpErrCh <- srv.Start(ctx) }()
 		// Give the listener a beat to bind so logs stay ordered; the

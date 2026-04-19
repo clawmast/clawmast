@@ -83,6 +83,17 @@ type Config struct {
 	// per the I3 contract: the local dashboard stays friction-free,
 	// remote clients must authenticate.
 	Token Token
+	// SupervisorVersion is the clawmastd build string propagated to
+	// the worker via CLAWMAST_SUPERVISOR_VERSION. Empty when the
+	// worker is running standalone (no supervisor); the /api/version
+	// handler exposes it as supervisor_version so the UI can render a
+	// "工作 / 监工" pair without an extra round-trip.
+	SupervisorVersion string
+	// StateDir is where the channel-preference file (and, historically,
+	// the bearer token) live. Empty keeps the /api/settings/channel
+	// write path locked (returns 503) while GET still succeeds with the
+	// ambient channel.
+	StateDir string
 }
 
 // DefaultAddr now binds on all interfaces so a Mac mini on a LAN can
@@ -145,6 +156,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/blacklist", s.handleBlacklistAdd)
 	s.mux.HandleFunc("POST /api/updates/check", s.handleUpdateCheck)
 	s.mux.HandleFunc("POST /api/updates/install", s.handleUpdateInstall)
+	s.mux.HandleFunc("GET /api/settings/channel", s.handleChannelGet)
+	s.mux.HandleFunc("POST /api/settings/channel", s.handleChannelSet)
 	s.mux.HandleFunc("GET /api/openclaw/status", s.handleOpenclawStatus)
 	s.mux.HandleFunc("POST /api/openclaw/fix", s.handleOpenclawFix)
 	s.mux.HandleFunc("POST /api/openclaw/action", s.handleOpenclawAction)

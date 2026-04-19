@@ -717,6 +717,34 @@ body {
 .switch input:checked + .switch-slider::before { transform: translateX(18px); background: #000; }
 .switch input:disabled + .switch-slider { opacity: 0.55; cursor: not-allowed; }
 
+/* Segmented picker — used for the update channel selector. Two pills
+   side-by-side; the active one inherits the accent colour so a glance
+   at the card confirms which channel is live. Disabled state mirrors
+   .btn[disabled] so the picker greys out while a restart is in flight. */
+.seg {
+  display: inline-flex;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+.seg-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.seg-btn:hover:not([aria-checked="true"]):not(:disabled) { color: var(--text); }
+.seg-btn[aria-checked="true"] { background: var(--accent); color: #000; font-weight: 500; }
+.seg-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
 /* ── Modal (token dialog) ──────────────────────────────────────── */
 .modal {
   border: 1px solid var(--border);

@@ -224,6 +224,45 @@
               <p class="settings-sub">ClawMast 自身的版本信息与更新偏好。Provider / 模型等 OpenClaw 相关设置请在其 CLI 中配置。</p>
             </div>
 
+            <!-- 系统 · 工作 + 监工 一览。没有系统托盘图标的用户靠
+                 这张卡片确认 clawmastd / clawmast 都活着。 -->
+            <section class="group-card">
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">工作 (clawmast)</span>
+                    <span class="row-value" id="sys-worker">—</span>
+                  </div>
+                  <div class="row-detail mono small" id="sys-worker-build">—</div>
+                </div>
+              </div>
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">监工 (clawmastd)</span>
+                    <span class="row-value" id="sys-supervisor">—</span>
+                  </div>
+                  <div class="row-detail muted" id="sys-supervisor-note">—</div>
+                </div>
+              </div>
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">安装目录</span>
+                    <span class="row-value mono small" id="sys-install-root">—</span>
+                  </div>
+                </div>
+              </div>
+              <div class="group-row">
+                <div class="row-body">
+                  <div class="row-main">
+                    <span class="row-label">运行时长</span>
+                    <span class="row-value" id="sys-uptime">—</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <!-- ClawMast 版本 + 更新 -->
             <section class="group-card">
               <div class="group-row">
@@ -244,12 +283,24 @@
                   <div class="row-detail" id="settings-update-note">尚未检查。</div>
                 </div>
               </div>
+              <!-- 通道切换。稳定 / 测试。切到 beta 需二次确认,
+                   切换落盘后由 supervisor 重启 worker 以生效。 -->
               <div class="group-row">
                 <div class="row-body">
                   <div class="row-main">
                     <span class="row-label">通道</span>
-                    <span class="row-value" id="settings-channel">—</span>
+                    <div class="seg" role="radiogroup" aria-label="更新通道">
+                      <button type="button" class="seg-btn" data-channel="stable"
+                              role="radio" aria-checked="true" id="channel-stable">
+                        稳定版
+                      </button>
+                      <button type="button" class="seg-btn" data-channel="beta"
+                              role="radio" aria-checked="false" id="channel-beta">
+                        测试版
+                      </button>
+                    </div>
                   </div>
+                  <div class="row-detail muted" id="channel-note">—</div>
                 </div>
               </div>
               <div class="group-row group-actions">
@@ -333,6 +384,27 @@
         <div class="modal-actions">
           <button type="button" class="btn" id="confirm-cancel" value="cancel">取消</button>
           <button type="submit" class="btn accent" id="confirm-ok" value="ok">继续</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Beta channel opt-in. Shown when the operator switches from
+         stable to beta; stable-selected does not prompt. -->
+    <dialog id="channel-dialog" class="modal">
+      <form method="dialog" class="modal-body" id="channel-form">
+        <h2>切换到测试版?</h2>
+        <p class="hint">
+          测试版(beta)会提前收到还没进入稳定通道的构建。它们通过了
+          单元 / 集成测试,但可能仍存在尚未捕获的回归。失败时监工
+          (clawmastd)会自动回滚到上一个版本。
+        </p>
+        <p class="hint muted">
+          切换后 worker 会重启以重新读取通道。OpenClaw 如果正在运行
+          会被短暂中断。
+        </p>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="channel-cancel" value="cancel">取消</button>
+          <button type="submit" class="btn accent" id="channel-ok" value="ok">切到测试版</button>
         </div>
       </form>
     </dialog>
