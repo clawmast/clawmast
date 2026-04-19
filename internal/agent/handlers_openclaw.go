@@ -96,15 +96,12 @@ func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// finalOutcome reports whether the post-action probe matches the
-// caller's intent. start / restart / fix expect alive=true; stop
-// expects alive=false; doctor has no expectation and passes
-// expectedAlive = actual so the outcome is always "ok".
-//
-// The previous implementation inverted the stop case — it reported
-// "failed" whenever !alive, so a successful stop showed as "停止失败"
-// in the UI. Intent-aware evaluation fixes that without the UI having
-// to special-case the action name.
+// finalOutcome reports whether the Fix cascade revived the gateway.
+// Unlike single actions (see actionFinalOutcome), the cascade's job
+// is explicitly "make the gateway alive", so the post-cascade probe
+// is the authoritative signal — the cascade already ran its own
+// probes between tiers and any mid-cascade warm-up has had time to
+// settle by the time this is called.
 func finalOutcome(alive, expectedAlive bool) string {
 	if alive == expectedAlive {
 		return "ok"
@@ -159,7 +156,16 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 	evCh := make(chan openclaw.StepEvent, 4)
 	go openclaw.RunAction(ctx, s.openclaw, evCh, openclaw.Action(name))
 
+	// cliOutcome captures the CLI step's own verdict so the terminal
+	// "final" event reports it faithfully. Before this was derived from
+	// a post-action probe, which raced with gateway warm-up and flipped
+	// a successful restart to "重启失败" whenever the gateway took more
+	// than a couple of seconds to answer health after coming up.
+	var cliOutcome openclaw.StepOutcome
 	for ev := range evCh {
+		if ev.Phase == "end" && ev.Outcome != "" {
+			cliOutcome = ev.Outcome
+		}
 		if err := enc.Encode(ev); err != nil {
 			cancel()
 			for range evCh {
@@ -178,13 +184,9 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 		Outcome string            `json:"outcome"`
 		Status  openclaw.Snapshot `json:"status"`
 	}{
-		Step:  "final",
-		Phase: "end",
-		// Each action carries an expectation about the post-probe alive
-		// state. Matching expectation -> "ok"; mismatch -> "failed".
-		// Doctor is read-only so its expectation is "unchanged", which
-		// we approximate by passing alive for both args (always "ok").
-		Outcome: finalOutcome(s.openclaw.Get().Alive, expectedAliveAfter(openclaw.Action(name), s.openclaw.Get().Alive)),
+		Step:    "final",
+		Phase:   "end",
+		Outcome: actionFinalOutcome(cliOutcome),
 		Status:  s.openclaw.Get(),
 	}
 	_ = enc.Encode(final)
@@ -193,19 +195,27 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// expectedAliveAfter returns the alive state each action intends to
-// leave the gateway in. Doctor is read-only; we pass through the
-// observed alive so finalOutcome always reports "ok".
-func expectedAliveAfter(a openclaw.Action, observedAlive bool) bool {
-	switch a {
-	case openclaw.ActionStop:
-		return false
-	case openclaw.ActionStart, openclaw.ActionRestart:
-		return true
-	case openclaw.ActionDoctor:
-		return observedAlive
+// actionFinalOutcome classifies a single CLI action's terminal result
+// for the stream's "final" event. The CLI's own exit code is the
+// authoritative signal — a successful `openclaw gateway restart`
+// returning exit=0 with the expected stdout means the restart
+// succeeded, even if the immediately-subsequent probe happens to miss
+// because the freshly-started gateway has not finished warming up.
+//
+// Trusting the post-action probe over the CLI caused a recurring
+// "console red / badge green" contradiction: the forced 5s post-probe
+// window got killed by ProbeTimeout (12s), final event reported
+// "failed", then the regular poller's next tick saw alive=true and
+// flipped the badge to 运行中 — leaving the console line permanently
+// lying about a restart that actually worked.
+//
+// Empty outcome (shouldn't happen — RunAction always emits an end
+// event) is treated as success so we don't invent a failure.
+func actionFinalOutcome(cliOutcome openclaw.StepOutcome) string {
+	if cliOutcome == "" || cliOutcome == openclaw.OutcomeOK {
+		return string(openclaw.OutcomeOK)
 	}
-	return observedAlive
+	return string(cliOutcome)
 }
 
 // intentForAction maps an action to the operator intent it encodes.

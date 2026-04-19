@@ -122,8 +122,14 @@ func RunAction(ctx context.Context, m *Manager, evCh chan<- StepEvent, a Action)
 
 	// Refresh the snapshot so the subsequent /api/openclaw/status poll
 	// in the UI reflects the post-action state without waiting for the
-	// 5s poll tick.
-	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// 3-5s poll tick. Budget matches ProbeTimeout because a freshly
+	// restarted gateway can take most of the health window to warm up;
+	// clipping this to anything shorter caused post-restart probes to
+	// be killed mid-flight and made successful restarts render as
+	// "重启失败" in the action console (while the background poller
+	// immediately saw alive=true on the next tick — a self-contradicting
+	// UI state).
+	pctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
 	defer cancel()
 	m.ProbeNow(pctx)
 }
