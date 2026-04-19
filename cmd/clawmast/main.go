@@ -31,6 +31,14 @@ func main() {
 		case "help", "-h", "--help":
 			printUsage(os.Stdout)
 			return
+		case "status":
+			os.Exit(runStatus(os.Args[2:], os.Stdout, os.Stderr))
+		case "doctor":
+			os.Exit(runDoctor(os.Args[2:], os.Stdout, os.Stderr))
+		case "logs":
+			os.Exit(runLogs(os.Args[2:], os.Stdout, os.Stderr))
+		case "open":
+			os.Exit(runOpen(os.Args[2:], os.Stdout, os.Stderr))
 		}
 	}
 
@@ -75,6 +83,10 @@ func parseLogLevel(s string) slog.Level {
 func printUsage(w *os.File) {
 	fmt.Fprintln(w, "Usage: clawmast [subcommand]")
 	fmt.Fprintln(w, "Subcommands:")
+	fmt.Fprintln(w, "  status    Show worker + supervisor state and the UI URL")
+	fmt.Fprintln(w, "  doctor    Run diagnostics (openclaw discovery, ports, token)")
+	fmt.Fprintln(w, "  logs      Print supervisor + worker log tails (use -f to follow)")
+	fmt.Fprintln(w, "  open      Open the local UI in the default browser")
 	fmt.Fprintln(w, "  version   Print build metadata and exit")
 	fmt.Fprintln(w, "  help      Print this help and exit")
 	fmt.Fprintln(w)
@@ -85,4 +97,7 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Environment:")
 	fmt.Fprintln(w, "  CLAWMAST_LOG_LEVEL   debug | info | warn | error (default info)")
+	fmt.Fprintln(w, "  CLAWMAST_HOME        Install root for subcommands (default:")
+	fmt.Fprintln(w, "                       $CLAWMAST_HOME, ~/.clawmast if present,")
+	fmt.Fprintln(w, "                       otherwise ~/.local/share/clawmast).")
 }

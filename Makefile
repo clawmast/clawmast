@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install uninstall install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill playground-up playground-down playground-status playground-publish playground-nuke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install uninstall install-smoke cli-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill playground-up playground-down playground-status playground-publish playground-nuke clean
 
 build: build-worker build-supervisor build-release
 
@@ -70,7 +70,14 @@ uninstall:
 install-smoke:
 	bash scripts/install-smoke.sh
 
-# T0-08 — forced-failure rollback test. Boots clawmastd with a deliberately
+# CI-friendly smoke test for the user-facing `clawmast` subcommands
+# (status, doctor, logs) against a throwaway install root. Exercises
+# daemon-up, daemon-down, and missing-tree scenarios without touching
+# launchd / systemd.
+cli-smoke:
+	bash scripts/cli-smoke.sh
+
+
 # crashing worker as "current" and verifies the supervisor swaps current ↔
 # previous after the crash-loop budget is exhausted.
 rollback-smoke:
