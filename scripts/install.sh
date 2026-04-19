@@ -19,11 +19,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TEMPLATES_DIR="${SCRIPT_DIR}/templates"
 
-PREFIX="${CLAWMAST_HOME:-${HOME}/.clawmast}"
+# Default install root follows the XDG Base Directory spec
+# (~/.local/share/<app>) so binaries live under a standard data
+# directory and symlinks in ~/.local/bin remain the discoverable
+# surface. Legacy ~/.clawmast/ installs keep working: resolve_prefix
+# below prefers an existing ~/.clawmast/current over the XDG default
+# so re-running install.sh on an old host is an in-place upgrade, not
+# a silent relocation.
+DEFAULT_PREFIX_XDG="${HOME}/.local/share/clawmast"
+LEGACY_PREFIX="${HOME}/.clawmast"
+PREFIX="${CLAWMAST_HOME:-}"   # empty => resolve below
 VERSION_LABEL=""
 SOURCE_MODE="auto"      # auto | local | build
 BIN_DIR=""              # override of ${REPO_ROOT}/bin; see --bin-dir
 INSTALL_SERVICE="yes"
+# INSTALL_SYMLINKS stays unset here so we can distinguish "user didn't
+# say" from "user said yes". main() below flips the default to "no"
+# when --no-service is set, so test/playground installs under /tmp
+# never plant symlinks into the host's /usr/local/bin.
+INSTALL_SYMLINKS=""
 FORCE="no"
 CHANNEL_DEFAULT="stable"
 
@@ -32,7 +46,11 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --prefix PATH           Install root (default: $CLAWMAST_HOME or ~/.clawmast)
+  --prefix PATH           Install root. Default resolution order:
+                          (1) $CLAWMAST_HOME if set;
+                          (2) ~/.clawmast if it already contains an
+                              install (legacy compat);
+                          (3) ~/.local/share/clawmast (XDG).
   --version LABEL         Version directory name under versions/ (default: derived)
   --source {auto|local|build}
                           auto  — prefer ./bin, fall back to `go build` (default)
@@ -40,7 +58,13 @@ Options:
                           build — always rebuild from this repo
   --bin-dir PATH          Read pre-built clawmast / clawmastd from PATH
                           instead of ./bin. Forces --source=local.
-  --no-service            Skip writing / enabling the launchd / systemd unit
+  --no-service            Skip writing / enabling the launchd / systemd unit.
+                          Implies --no-symlinks unless --symlinks is also set.
+  --symlinks              Force creating CLI symlinks even with --no-service.
+  --no-symlinks           Skip creating /usr/local/bin or ~/.local/bin
+                          CLI symlinks. The UI and service still work; the
+                          clawmast / clawmastd commands just stay under
+                          the install root.
   --force                 Overwrite existing install without prompting
   -h, --help              Show this help and exit
 
@@ -62,6 +86,8 @@ while (( $# > 0 )); do
     --source)     SOURCE_MODE="$2"; shift 2 ;;
     --bin-dir)    BIN_DIR="$2"; SOURCE_MODE="local"; shift 2 ;;
     --no-service) INSTALL_SERVICE="no"; shift ;;
+    --symlinks)    INSTALL_SYMLINKS="yes"; shift ;;
+    --no-symlinks) INSTALL_SYMLINKS="no"; shift ;;
     --force)      FORCE="yes"; shift ;;
     -h|--help)    usage; exit 0 ;;
     *)            die "unknown option: $1" ;;
@@ -83,6 +109,54 @@ case "${UNAME_M}" in
   *) die "unsupported arch: ${UNAME_M}" ;;
 esac
 log "host: ${OS}/${ARCH}"
+
+# Prefix resolution ----------------------------------------------------------
+#
+# Precedence, applied only when --prefix was not passed explicitly and
+# CLAWMAST_HOME is unset:
+#   1. ~/.clawmast already contains a valid install -> use it (legacy).
+#   2. Otherwise -> ~/.local/share/clawmast (XDG data dir).
+#
+# We detect a "valid install" by the presence of ./current (the symlink
+# install.sh itself plants). That keeps mere stray files in the legacy
+# path from dragging us back there.
+resolve_prefix() {
+  if [[ -n "${PREFIX}" ]]; then
+    return
+  fi
+  if [[ -L "${LEGACY_PREFIX}/current" ]]; then
+    PREFIX="${LEGACY_PREFIX}"
+    warn "found legacy install at ${LEGACY_PREFIX}; continuing in place"
+    warn "run 'bash scripts/install.sh --prefix ${DEFAULT_PREFIX_XDG}' to migrate later"
+    return
+  fi
+  PREFIX="${DEFAULT_PREFIX_XDG}"
+}
+resolve_prefix
+
+# CLI symlink dir resolution -------------------------------------------------
+#
+# Prefers /usr/local/bin when writable (zero PATH setup on macOS with
+# Homebrew, standard on Linux) and falls back to ~/.local/bin (XDG).
+# Writing the choice to state/cli-bin-dir lets uninstall.sh remove the
+# symlinks without second-guessing the original selection.
+pick_cli_bin_dir() {
+  if [[ "${INSTALL_SYMLINKS}" != "yes" ]]; then
+    echo ""
+    return
+  fi
+  local candidates=( "/usr/local/bin" "${HOME}/.local/bin" )
+  for d in "${candidates[@]}"; do
+    if [[ -d "${d}" && -w "${d}" ]]; then
+      echo "${d}"; return
+    fi
+    # ~/.local/bin may not exist yet; we can create it without sudo.
+    if [[ "${d}" == "${HOME}/.local/bin" ]]; then
+      echo "${d}"; return
+    fi
+  done
+  echo ""
+}
 
 # Binary acquisition ---------------------------------------------------------
 
@@ -190,8 +264,30 @@ EOF
 
 install_binaries() {
   local src="${BIN_DIR}"
-  install -m 0755 "${src}/clawmastd" "${PREFIX}/bin/clawmastd.new"
-  mv -f "${PREFIX}/bin/clawmastd.new" "${PREFIX}/bin/clawmastd"
+  local dst="${PREFIX}/bin/clawmastd"
+
+  # Supervisor upgrade safety net: if a clawmastd already exists, keep
+  # a backup so a bad rollout can be reversed without re-running the
+  # whole installer. The .new → mv pattern below is atomic on the same
+  # filesystem, so a successful mv overwrites the binary in one inode
+  # swap; the smoke test then confirms the replacement is runnable
+  # before we touch anything else (unit reload, current symlink, …).
+  if [[ -x "${dst}" ]]; then
+    cp -f "${dst}" "${dst}.bak"
+  fi
+
+  install -m 0755 "${src}/clawmastd" "${dst}.new"
+  mv -f "${dst}.new" "${dst}"
+
+  if ! "${dst}" version >/dev/null 2>&1; then
+    if [[ -x "${dst}.bak" ]]; then
+      warn "new clawmastd failed smoke test; reverting to previous binary"
+      mv -f "${dst}.bak" "${dst}"
+      die "supervisor upgrade aborted (rolled back); investigate ${src}/clawmastd"
+    fi
+    die "new clawmastd failed smoke test and no backup was available"
+  fi
+  rm -f "${dst}.bak"
 
   local vdir="${PREFIX}/versions/${VERSION_LABEL}"
   install -d -m 0700 "${vdir}"
@@ -256,9 +352,10 @@ install_launchd() {
   local plist="${HOME}/Library/LaunchAgents/com.clawmast.clawmastd.plist"
   mkdir -p "$(dirname "${plist}")"
   render_template "${TEMPLATES_DIR}/com.clawmast.clawmastd.plist.tmpl" "${plist}" \
-    CLAWMASTD_BIN "${PREFIX}/bin/clawmastd" \
-    CLAWMAST_HOME "${PREFIX}" \
-    LOG_DIR       "${PREFIX}/logs"
+    CLAWMASTD_BIN  "${PREFIX}/bin/clawmastd" \
+    CLAWMAST_HOME  "${PREFIX}" \
+    LOG_DIR        "${PREFIX}/logs" \
+    HOME_LOCAL_BIN "${HOME}/.local/bin"
   chmod 0644 "${plist}"
   log "wrote ${plist}"
 
@@ -273,8 +370,9 @@ install_systemd_user() {
   local unit="${unit_dir}/clawmastd.service"
   mkdir -p "${unit_dir}"
   render_template "${TEMPLATES_DIR}/clawmastd.service.tmpl" "${unit}" \
-    CLAWMASTD_BIN "${PREFIX}/bin/clawmastd" \
-    CLAWMAST_HOME "${PREFIX}"
+    CLAWMASTD_BIN  "${PREFIX}/bin/clawmastd" \
+    CLAWMAST_HOME  "${PREFIX}" \
+    HOME_LOCAL_BIN "${HOME}/.local/bin"
   chmod 0644 "${unit}"
   log "wrote ${unit}"
 
@@ -296,9 +394,63 @@ install_service() {
   esac
 }
 
+# CLI symlinks ---------------------------------------------------------------
+#
+# Planting clawmast + clawmastd on PATH is what turns "a daemon somewhere"
+# into a command the user can actually type. The chosen directory is
+# recorded under state/cli-bin-dir so uninstall.sh can sweep the links
+# back out without re-guessing our preference order. Failures here are
+# advisory, not fatal: the service still runs; only the CLI shortcut is
+# missing, and the message tells the user exactly which fallback to add
+# to PATH.
+install_cli_symlinks() {
+  local target_dir
+  target_dir="$(pick_cli_bin_dir)"
+  if [[ -z "${target_dir}" ]]; then
+    log "--no-symlinks: skipped CLI shortcut creation"
+    rm -f "${PREFIX}/state/cli-bin-dir"
+    return
+  fi
+
+  if ! mkdir -p "${target_dir}" 2>/dev/null; then
+    warn "cannot create ${target_dir}; skipping CLI shortcuts"
+    return
+  fi
+  if [[ ! -w "${target_dir}" ]]; then
+    warn "no write access to ${target_dir}; skipping CLI shortcuts"
+    warn "add ${PREFIX}/current and ${PREFIX}/bin to PATH manually if needed"
+    return
+  fi
+
+  ln -snf "${PREFIX}/current/clawmast"  "${target_dir}/clawmast"
+  ln -snf "${PREFIX}/bin/clawmastd"     "${target_dir}/clawmastd"
+  printf '%s\n' "${target_dir}" > "${PREFIX}/state/cli-bin-dir"
+  chmod 0600 "${PREFIX}/state/cli-bin-dir"
+  log "symlinked clawmast + clawmastd into ${target_dir}"
+
+  # ~/.local/bin is not on PATH by default on macOS; nudge the user
+  # rather than silently leaving `clawmast status` unreachable.
+  case ":${PATH}:" in
+    *":${target_dir}:"*) ;;
+    *) warn "${target_dir} is not on PATH; add it to your shell rc to use 'clawmast' directly" ;;
+  esac
+}
+
 # Main -----------------------------------------------------------------------
 
 main() {
+  # Default symlink policy: track --no-service. Test/playground installs
+  # under /tmp run headless and should not plant links into the host's
+  # /usr/local/bin; a real user install registers the service and gets
+  # the links planted. --symlinks / --no-symlinks override either way.
+  if [[ -z "${INSTALL_SYMLINKS}" ]]; then
+    if [[ "${INSTALL_SERVICE}" == "yes" ]]; then
+      INSTALL_SYMLINKS="yes"
+    else
+      INSTALL_SYMLINKS="no"
+    fi
+  fi
+
   ensure_binaries
   [[ -n "${VERSION_LABEL}" ]] || VERSION_LABEL="$(derive_version)"
   log "version: ${VERSION_LABEL}"
@@ -321,8 +473,14 @@ main() {
     log "--no-service: skipped service registration"
   fi
 
+  install_cli_symlinks
+
   log "install complete at ${PREFIX}"
-  log "verify: ${PREFIX}/current/clawmast version"
+  if [[ -f "${PREFIX}/state/cli-bin-dir" ]]; then
+    log "verify: clawmast version   (or: ${PREFIX}/current/clawmast version)"
+  else
+    log "verify: ${PREFIX}/current/clawmast version"
+  fi
 }
 
 main "$@"

@@ -16,6 +16,15 @@
     <dict>
         <key>CLAWMAST_HOME</key>
         <string>@@CLAWMAST_HOME@@</string>
+        <!-- launchd strips PATH to /usr/bin:/bin:/usr/sbin:/sbin, which
+             hides Homebrew (/opt/homebrew/bin, /usr/local/bin) and every
+             per-user Node toolchain. The worker's openclaw discovery
+             falls back to bare filesystem probes when LookPath misses,
+             but a broader PATH here lets the fast path (LookPath) win
+             for the common brew + ~/.local/bin layouts without extra
+             stat calls. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:@@HOME_LOCAL_BIN@@:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
     <!-- RunAtLoad starts clawmastd on user login. KeepAlive ensures

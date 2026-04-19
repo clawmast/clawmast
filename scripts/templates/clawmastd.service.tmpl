@@ -8,6 +8,12 @@ Wants=network-online.target
 Type=simple
 ExecStart=@@CLAWMASTD_BIN@@ -install-root @@CLAWMAST_HOME@@
 Environment=CLAWMAST_HOME=@@CLAWMAST_HOME@@
+# systemd --user inherits PATH from the user@.service slice, which on
+# most distros is /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# — fine for apt-installed Node, but per-user toolchains (fnm, volta,
+# asdf) only live under $HOME. Discovery's filesystem probes catch them
+# but a broader PATH lets the fast LookPath path win without extra stat.
+Environment=PATH=@@HOME_LOCAL_BIN@@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 # clawmastd implements the sd_notify subset described in
 # architecture/supervisor-protocol.md; Type=simple is correct because

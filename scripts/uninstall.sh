@@ -13,7 +13,13 @@
 
 set -euo pipefail
 
-PREFIX="${CLAWMAST_HOME:-${HOME}/.clawmast}"
+# Prefix resolution mirrors install.sh: honour CLAWMAST_HOME / --prefix
+# first, then fall back to the legacy ~/.clawmast if it contains an
+# install, otherwise the XDG default. That way `make uninstall` on a
+# host installed before XDG still finds the right tree.
+DEFAULT_PREFIX_XDG="${HOME}/.local/share/clawmast"
+LEGACY_PREFIX="${HOME}/.clawmast"
+PREFIX="${CLAWMAST_HOME:-}"
 KEEP_DATA="no"
 ASSUME_YES="no"
 DRY_RUN="no"
@@ -23,7 +29,9 @@ usage() {
 Usage: uninstall.sh [options]
 
 Options:
-  --prefix PATH   Install root to remove (default: $CLAWMAST_HOME or ~/.clawmast)
+  --prefix PATH   Install root to remove. Default resolution order:
+                  (1) $CLAWMAST_HOME, (2) ~/.clawmast if it contains
+                  an install, (3) ~/.local/share/clawmast.
   --keep-data     Remove binaries and the service unit but preserve
                   state/, data/, logs/, and keys/ under the prefix.
   --dry-run       Print what would be removed without touching anything.
@@ -60,6 +68,17 @@ case "${UNAME_S}" in
   Linux)  OS="linux"  ;;
   *)      die "unsupported OS: ${UNAME_S} (Windows is Tier 2, manual install)" ;;
 esac
+resolve_prefix() {
+  if [[ -n "${PREFIX}" ]]; then
+    return
+  fi
+  if [[ -L "${LEGACY_PREFIX}/current" ]]; then
+    PREFIX="${LEGACY_PREFIX}"; return
+  fi
+  PREFIX="${DEFAULT_PREFIX_XDG}"
+}
+resolve_prefix
+
 log "host: ${OS}"
 log "prefix: ${PREFIX}"
 [[ "${DRY_RUN}" == "yes" ]] && log "dry-run: no changes will be made"
@@ -119,6 +138,39 @@ remove_service() {
   esac
 }
 
+# CLI symlink teardown --------------------------------------------------------
+#
+# install.sh records the chosen bin dir under state/cli-bin-dir. If the
+# marker is missing (older install or aborted run) we still probe the
+# two canonical candidates so leftover symlinks don't outlive the tree
+# they point into.
+remove_cli_symlinks() {
+  local dirs=()
+  if [[ -f "${PREFIX}/state/cli-bin-dir" ]]; then
+    dirs+=("$(<"${PREFIX}/state/cli-bin-dir")")
+  fi
+  dirs+=( "/usr/local/bin" "${HOME}/.local/bin" )
+
+  local seen=""
+  for d in "${dirs[@]}"; do
+    [[ -n "${d}" ]] || continue
+    case ":${seen}:" in *":${d}:"*) continue ;; esac
+    seen="${seen}:${d}"
+    for name in clawmast clawmastd; do
+      local link="${d}/${name}"
+      if [[ -L "${link}" ]]; then
+        local tgt; tgt="$(readlink "${link}" 2>/dev/null || true)"
+        # Only remove symlinks that point into our prefix, so we don't
+        # clobber an unrelated binary that happens to share the name.
+        case "${tgt}" in
+          "${PREFIX}"/*) run rm -f "${link}"; log "removed ${link}" ;;
+          *) ;;
+        esac
+      fi
+    done
+  done
+}
+
 # Prefix teardown -------------------------------------------------------------
 
 remove_prefix() {
@@ -145,6 +197,7 @@ remove_prefix() {
 
 main() {
   remove_service
+  remove_cli_symlinks
   remove_prefix
   log "uninstall complete"
 }
