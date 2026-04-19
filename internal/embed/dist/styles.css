@@ -933,6 +933,41 @@ body {
    secondary action on the far left so copy is discoverable. */
 #gateway-form .modal-actions { justify-content: space-between; }
 
+/* Probe sparkline. The container carries a small label + the SVG; the
+   SVG itself is stretched across the dialog width, fixed at 40px
+   tall, and stays low-contrast so the numeric kv rows above remain
+   the primary focus. Red dots (.fail) mark alive=false samples. */
+.modal-spark-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+.modal-kv-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.modal-spark {
+  width: 100%;
+  height: 40px;
+  background: rgba(127, 127, 127, 0.06);
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  border-radius: var(--radius, 8px);
+}
+.modal-spark .line {
+  fill: none;
+  stroke: var(--accent, #58a6ff);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.modal-spark .dot {
+  fill: var(--accent, #58a6ff);
+}
+.modal-spark .dot.fail {
+  fill: var(--err, #f85149);
+}
+
 /* Narrow viewport: kv stacks so 'label' sits above 'value'.
    Still easier to scan than a right-aligned dd that gets clipped
    on a 360px viewport. */

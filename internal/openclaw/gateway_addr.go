@@ -36,10 +36,19 @@ const AddressRefreshInterval = 5 * time.Minute
 // mirrors the `portSource` field of `openclaw gateway status --json`
 // ("service args" / "config" / …) plus our own sentinels ("default"
 // for the pre-resolve seed, "cache" for recycled values).
+//
+// PID carries `service.runtime.pid` when the upstream reports the
+// gateway as running; 0 otherwise. It is cached alongside host/port
+// because the UI renders both in the same diagnostic dialog and the
+// resolver hits the CLI exactly once per refresh either way. A zero
+// PID must never overwrite a previously non-zero PID in the cache —
+// that lets a flapping "stopped momentarily" status avoid erasing the
+// observed-running baseline the Manager uses to compute uptime.
 type GatewayAddress struct {
 	Host       string
 	Port       int
 	Source     string
+	PID        int
 	ResolvedAt time.Time
 }
 
@@ -68,6 +77,12 @@ type gatewayStatusEnvelope struct {
 		Port       int    `json:"port"`
 		PortSource string `json:"portSource"`
 	} `json:"gateway"`
+	Service struct {
+		Runtime struct {
+			Status string `json:"status"`
+			PID    int    `json:"pid"`
+		} `json:"runtime"`
+	} `json:"service"`
 }
 
 // addrCache is an atomic pointer so probeFast can read it lock-free on
@@ -124,10 +139,20 @@ func ResolveGatewayAddress(ctx context.Context, runner Runner) (GatewayAddress, 
 	if source == "" {
 		source = "service args"
 	}
+	// A zero PID with status != "running" means the upstream sees the
+	// service as stopped; we surface it as 0. A missing runtime block
+	// (unlikely but not impossible if the CLI evolves) also renders
+	// as 0 and the UI treats it as "pid unknown" rather than
+	// miscounting an old PID as current.
+	pid := 0
+	if env.Service.Runtime.Status == "running" {
+		pid = env.Service.Runtime.PID
+	}
 	addr := GatewayAddress{
 		Host:       host,
 		Port:       env.Gateway.Port,
 		Source:     source,
+		PID:        pid,
 		ResolvedAt: time.Now().UTC(),
 	}
 	storeGatewayAddress(addr)

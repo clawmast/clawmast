@@ -118,12 +118,67 @@ func (m *Manager) ProbeNow(ctx context.Context) Snapshot {
 	// without wiring discovery through its own signature.
 	next.BinaryPath = disc.Path
 	next.BinarySource = string(disc.Source)
+	sample := ProbeSample{
+		At:      next.LastProbeAt,
+		Alive:   next.Alive,
+		ProbeMS: next.LastProbeMS,
+	}
+	now := time.Now().UTC()
 	m.store.set(func(s *Snapshot) {
+		// Preserve cumulative state that probe() cannot see: Intent
+		// (written out-of-band by SetIntent), CrashCount, ProbeHistory,
+		// and GatewayPIDSince. Reading from s (the lock-held current
+		// snapshot) rather than prev closes the gap where a concurrent
+		// writer lands between Get() above and set() here.
 		intent := s.Intent
+		crashes := s.CrashCount
+		history := s.ProbeHistory
+		pidSince := s.GatewayPIDSince
+		prevPID := s.GatewayPID
+		prevAlive := s.Alive
+		hadProbed := s.Probed
 		*s = next
 		s.Intent = intent
+
+		// CrashCount increments on every observed alive=true→false
+		// edge. `hadProbed` guards the first tick after boot so an
+		// initial alive=false does not count as a crash (we never saw
+		// it up in the first place).
+		if hadProbed && prevAlive && !next.Alive {
+			crashes++
+		}
+		s.CrashCount = crashes
+
+		// GatewayPIDSince resets when we observe a different non-zero
+		// PID. Keeping it stable across a momentary PID=0 (status flap
+		// during a transient) means uptime does not reset every time
+		// `gateway status` catches the service mid-teardown.
+		switch {
+		case next.GatewayPID != 0 && next.GatewayPID != prevPID:
+			s.GatewayPIDSince = rfc3339(now)
+		case next.GatewayPID == 0:
+			// Keep whatever we had; a zero PID could be transient.
+			s.GatewayPIDSince = pidSince
+		default:
+			s.GatewayPIDSince = pidSince
+		}
+
+		s.ProbeHistory = appendProbeSample(history, sample)
 	})
 	return m.store.Get()
+}
+
+// appendProbeSample appends sample to history, allocating a new slice
+// to avoid aliasing the caller's backing array, and trims the result
+// to the most recent ProbeHistoryLen entries.
+func appendProbeSample(history []ProbeSample, sample ProbeSample) []ProbeSample {
+	out := make([]ProbeSample, 0, len(history)+1)
+	out = append(out, history...)
+	out = append(out, sample)
+	if len(out) > ProbeHistoryLen {
+		out = out[len(out)-ProbeHistoryLen:]
+	}
+	return out
 }
 
 // SetIntent records the operator's stated desire for the gateway's

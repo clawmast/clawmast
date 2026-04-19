@@ -182,11 +182,15 @@ func probe(ctx context.Context, runner Runner, prev Snapshot) Snapshot {
 	// Snapshot the resolved gateway address every tick so the UI can
 	// render the live host/port pair (the resolver runs asynchronously
 	// on its own schedule; reading the cache here is lock-free).
+	// PID is populated from the same call but GatewayPIDSince is
+	// left for ProbeNow to manage: it depends on whether the PID
+	// changed vs. the stored snapshot, which probe() cannot see.
 	addr := LoadGatewayAddress()
 	next.GatewayHost = addr.Host
 	next.GatewayPort = addr.Port
 	next.GatewayPortSource = addr.Source
 	next.GatewayAddrResolved = rfc3339(addr.ResolvedAt)
+	next.GatewayPID = addr.PID
 
 	if probeFastDisabled {
 		// Test path: CLI drives every field, Alive included.

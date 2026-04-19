@@ -454,7 +454,19 @@
           <dt>最后探测</dt>  <dd id="gateway-dialog-when">—</dd>
           <dt>探测用时</dt>  <dd id="gateway-dialog-duration">—</dd>
           <dt>探测命令</dt>  <dd class="mono small" id="gateway-dialog-cmd">GET http://127.0.0.1:18789/health</dd>
+          <dt>Gateway PID</dt>   <dd class="mono small" id="gateway-dialog-pid">—</dd>
+          <dt>观察到运行</dt>    <dd id="gateway-dialog-uptime">—</dd>
+          <dt>崩溃次数</dt>      <dd id="gateway-dialog-crashes">0</dd>
         </dl>
+        <!-- Probe sparkline. Renders the last ProbeHistoryLen samples
+             (20) as a flat SVG line; red dots mark alive=false ticks.
+             Hidden until we have ≥2 samples so an empty axis never
+             flashes during the first second after boot. -->
+        <div class="modal-spark-wrap" id="gateway-dialog-spark-wrap" hidden>
+          <div class="modal-kv-label">探测历史 (最近 20 次)</div>
+          <svg id="gateway-dialog-spark" class="modal-spark" viewBox="0 0 200 40"
+               preserveAspectRatio="none" aria-label="最近探测延迟"></svg>
+        </div>
         <div class="modal-error-wrap" id="gateway-dialog-error-wrap" hidden>
           <div class="modal-error-label">错误信息</div>
           <pre class="modal-error" id="gateway-dialog-error"></pre>

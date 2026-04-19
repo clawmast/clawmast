@@ -92,7 +92,49 @@ type Snapshot struct {
 	GatewayPort         int    `json:"gateway_port,omitempty"`
 	GatewayPortSource   string `json:"gateway_port_source,omitempty"`
 	GatewayAddrResolved string `json:"gateway_addr_resolved_at,omitempty"`
+
+	// GatewayPID is service.runtime.pid from the resolver, 0 when the
+	// upstream reports the service as stopped or when we have not
+	// resolved yet. GatewayPIDSince is our observed RFC3339 timestamp
+	// for the first probe that saw this PID — it resets whenever PID
+	// changes to a new non-zero value. The UI derives uptime as
+	// "now − pid_since" and phrases it as "seen running for X" to be
+	// honest about the fact that it resets on clawmast restart. PID
+	// is not carried on the wire as an action target — it is purely a
+	// rendering hint.
+	GatewayPID      int    `json:"gateway_pid,omitempty"`
+	GatewayPIDSince string `json:"gateway_pid_since,omitempty"`
+
+	// CrashCount tallies alive=true→false transitions observed by the
+	// poller since the clawmast process started. Counts only edges,
+	// not sustained-down ticks, and never decrements. Resets to 0 on
+	// clawmast restart (it is in-memory only). The UI surfaces this
+	// in the diagnostic dialog so an operator glancing at a flapping
+	// gateway can tell "it crashed 4 times in 5 minutes" from "it
+	// just went down once and is still down".
+	CrashCount int `json:"crash_count"`
+
+	// ProbeHistory is a rolling ring of the most recent probe samples,
+	// newest-last. Bounded by ProbeHistoryLen so the JSON payload
+	// stays tiny even over a long session. The UI plots probe_ms as a
+	// sparkline with red markers for alive=false ticks.
+	ProbeHistory []ProbeSample `json:"probe_history,omitempty"`
 }
+
+// ProbeSample is one entry in Snapshot.ProbeHistory. Kept as plain
+// fields rather than a richer struct so the JSON on /api/openclaw/
+// status reads naturally in a browser inspector.
+type ProbeSample struct {
+	At      string `json:"at"`
+	Alive   bool   `json:"alive"`
+	ProbeMS int64  `json:"probe_ms"`
+}
+
+// ProbeHistoryLen bounds Snapshot.ProbeHistory. 20 samples at the
+// active cadence (1 s) covers the last ≈20 seconds of behaviour,
+// which is long enough for the UI to show a meaningful trend without
+// bloating every /status response.
+const ProbeHistoryLen = 20
 
 // Intent is the operator's stated desire for the gateway's run state.
 // Used to distinguish "已停止" (user stopped it) from "异常" (it crashed

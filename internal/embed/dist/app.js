@@ -42,6 +42,11 @@
   const gatewayDialogWhen = $("gateway-dialog-when");
   const gatewayDialogDuration = $("gateway-dialog-duration");
   const gatewayDialogCmd = $("gateway-dialog-cmd");
+  const gatewayDialogPID = $("gateway-dialog-pid");
+  const gatewayDialogUptime = $("gateway-dialog-uptime");
+  const gatewayDialogCrashes = $("gateway-dialog-crashes");
+  const gatewayDialogSparkWrap = $("gateway-dialog-spark-wrap");
+  const gatewayDialogSpark = $("gateway-dialog-spark");
   const gatewayDialogErrorWrap = $("gateway-dialog-error-wrap");
   const gatewayDialogError = $("gateway-dialog-error");
   const gatewayDialogCopy = $("gateway-dialog-copy");
@@ -343,30 +348,38 @@
 
   // setGatewayRow is the specialised setter for the Gateway row. The
   // row displays a short verdict word ("运行中" / "已停止" / "未响应" …).
-  // When `detail` is non-empty we reveal the chevron button and cache
-  // the drill-down payload in `gatewayDiag` so the dialog (opened from
-  // the chevron) can render structured probe info without re-fetching.
-  // `meta` carries the snapshot fields the dialog needs (probe_at,
-  // probe_ms); kept as a loose bag so callers don't have to thread the
-  // whole snapshot through.
-  let gatewayDiag = null;
-  function setGatewayRow(state, text, detail, meta) {
+  // The chevron visibility and dialog payload are driven separately by
+  // setGatewayDiag(snapshot) so the dialog can always surface PID /
+  // uptime / crash count / probe history, not just error details.
+  function setGatewayRow(state, text) {
     setHealthRow(openclawRowPort, openclawPortText, state, text);
+  }
+
+  // gatewayDiag is the data bag the dialog reads when the chevron is
+  // clicked. Populated by setGatewayDiag from the full snapshot so
+  // every render refreshes observability numbers, not only the
+  // abnormal path. Null clears the chevron (used when we have no
+  // useful info — pre-probe, CLI missing, or deliberately stopped).
+  let gatewayDiag = null;
+  function setGatewayDiag(s, stateText, errText) {
     if (!openclawGatewayMore) return;
-    const err = (detail || "").trim();
-    if (err) {
-      gatewayDiag = {
-        stateText: text,
-        probeAtISO: meta && meta.probeAtISO ? meta.probeAtISO : "",
-        probeMS: meta && meta.probeMS ? meta.probeMS : 0,
-        probeURL: meta && meta.probeURL ? meta.probeURL : "",
-        error: err,
-      };
-      openclawGatewayMore.hidden = false;
-    } else {
+    if (!s) {
       gatewayDiag = null;
       openclawGatewayMore.hidden = true;
+      return;
     }
+    gatewayDiag = {
+      stateText: stateText || "",
+      probeAtISO: s.last_probe_at || "",
+      probeMS: s.last_probe_ms || 0,
+      probeURL: gatewayHealthURL(s),
+      pid: s.gateway_pid || 0,
+      pidSinceISO: s.gateway_pid_since || "",
+      crashCount: s.crash_count || 0,
+      history: Array.isArray(s.probe_history) ? s.probe_history : [],
+      error: (errText || "").trim(),
+    };
+    openclawGatewayMore.hidden = false;
   }
 
   // gatewayEndpoint renders the "host:port" pair the probe actually
@@ -395,7 +408,7 @@
     setOpenclawBadge("pending", p.badge);
     setOpenclawTone("warn");
     setOpenclawSub(p.sub);
-    setGatewayRow("pending", p.row, "");
+    setGatewayRow("pending", p.row);
   }
 
   function renderOpenClaw(s) {
@@ -412,7 +425,8 @@
       setOpenclawTone(null);
       setOpenclawSub("连接本机 openclaw CLI 并探测网关状态");
       setHealthRow(openclawRowService, openclawServiceText, "unknown", "检测中");
-      setGatewayRow("unknown", "检测中", "");
+      setGatewayRow("unknown", "检测中");
+      setGatewayDiag(null);
       return;
     }
     if (s.cli_missing) {
@@ -424,7 +438,8 @@
       openclawProbed.textContent = s.last_probe_at ? relStamp(s.last_probe_at) : "—";
       setOpenclawSub("未安装 openclaw CLI · 请按官方文档完成安装");
       setHealthRow(openclawRowService, openclawServiceText, "err", "openclaw CLI 未安装");
-      setGatewayRow("off", "—", "");
+      setGatewayRow("off", "—");
+      setGatewayDiag(null);
       return;
     }
 
@@ -451,7 +466,8 @@
       setActionState("stopped");
       setOpenclawTone(null);
       setOpenclawSub("已手动停止 · 点击启动重新拉起");
-      setGatewayRow("off", "已停止", "");
+      setGatewayRow("off", "已停止");
+      setGatewayDiag(s, "已停止", "");
     } else if (s.alive) {
       setOpenclawBadge("healthy", "运行中");
       setActionState("online");
@@ -460,7 +476,8 @@
       bits.push(s.version ? `v${s.version}` : "OpenClaw");
       bits.push(gatewayEndpoint(s));
       setOpenclawSub(bits.join(" · "));
-      setGatewayRow("ok", "运行中", "");
+      setGatewayRow("ok", "运行中");
+      setGatewayDiag(s, "运行中", "");
     } else {
       // !alive with no explicit "stopped" intent = abnormal. Either it
       // crashed or it never came up; either way the operator should
@@ -471,11 +488,8 @@
       setActionState("offline");
       setOpenclawTone("down");
       setOpenclawSub("点击一键修复,或使用启动按钮手动拉起");
-      setGatewayRow("err", "未响应", s.probe_error || "", {
-        probeAtISO: s.last_probe_at,
-        probeMS: s.last_probe_ms,
-        probeURL: gatewayHealthURL(s),
-      });
+      setGatewayRow("err", "未响应");
+      setGatewayDiag(s, "未响应", s.probe_error || "");
     }
     lastSessionsCount = s.sessions_count || 0;
     openclawChannelsRow.hidden = !(s.channel_count || s.sessions_count);
@@ -697,11 +711,87 @@
         ? `GET ${gatewayDiag.probeURL}`
         : "GET http://127.0.0.1:18789/health";
     }
+    if (gatewayDialogPID) {
+      gatewayDialogPID.textContent = gatewayDiag.pid
+        ? String(gatewayDiag.pid)
+        : "—";
+    }
+    if (gatewayDialogUptime) {
+      gatewayDialogUptime.textContent = gatewayDiag.pidSinceISO
+        ? relStamp(gatewayDiag.pidSinceISO)
+        : "—";
+    }
+    if (gatewayDialogCrashes) {
+      gatewayDialogCrashes.textContent = String(gatewayDiag.crashCount || 0);
+    }
+    renderSparkline(gatewayDiag.history);
     const err = gatewayDiag.error || "";
     gatewayDialogErrorWrap.hidden = !err;
     gatewayDialogError.textContent = err;
     if (typeof gatewayDialog.showModal === "function") gatewayDialog.showModal();
     else gatewayDialog.setAttribute("open", "");
+  }
+
+  // renderSparkline paints the last N probe samples into the dialog's
+  // SVG. X = sample index (0..N-1), Y = probe_ms normalised into the
+  // 40px container. alive=false samples get a red dot marker on the
+  // baseline so flapping is visually distinct from slow probes. We
+  // bail out under 2 samples — a single data point draws as a dot
+  // nobody can read as a trend.
+  function renderSparkline(history) {
+    if (!gatewayDialogSpark || !gatewayDialogSparkWrap) return;
+    const samples = Array.isArray(history) ? history : [];
+    if (samples.length < 2) {
+      gatewayDialogSparkWrap.hidden = true;
+      gatewayDialogSpark.replaceChildren();
+      return;
+    }
+    gatewayDialogSparkWrap.hidden = false;
+    const W = 200, H = 40, padX = 2, padY = 4;
+    const inner = W - 2 * padX;
+    const stepX = samples.length > 1 ? inner / (samples.length - 1) : 0;
+    const okMs = samples.filter(s => s.alive).map(s => s.probe_ms || 0);
+    const maxMs = okMs.length ? Math.max(...okMs) : 1;
+    const scaleY = (ms) => {
+      const clamped = Math.min(Math.max(ms, 0), maxMs || 1);
+      return padY + (H - 2 * padY) * (1 - clamped / (maxMs || 1));
+    };
+    // Line runs through alive samples only — a !alive tick leaves a
+    // gap, which reads as "the service was down here".
+    const segments = [];
+    let current = [];
+    samples.forEach((s, i) => {
+      const x = padX + i * stepX;
+      if (s.alive) {
+        current.push(`${x.toFixed(1)},${scaleY(s.probe_ms || 0).toFixed(1)}`);
+      } else if (current.length) {
+        segments.push(current);
+        current = [];
+      }
+    });
+    if (current.length) segments.push(current);
+
+    const parts = [];
+    for (const seg of segments) {
+      if (seg.length >= 2) {
+        parts.push(`<polyline class="line" points="${seg.join(" ")}" />`);
+      }
+    }
+    samples.forEach((s, i) => {
+      if (s.alive) return;
+      const x = (padX + i * stepX).toFixed(1);
+      const y = (H - padY).toFixed(1);
+      parts.push(`<circle class="dot fail" cx="${x}" cy="${y}" r="2" />`);
+    });
+    // Innermost newest sample gets a small dot so "now" is legible
+    // even when the line's last vertex is at the right edge.
+    const last = samples[samples.length - 1];
+    if (last && last.alive) {
+      const x = (padX + (samples.length - 1) * stepX).toFixed(1);
+      const y = scaleY(last.probe_ms || 0).toFixed(1);
+      parts.push(`<circle class="dot" cx="${x}" cy="${y}" r="1.6" />`);
+    }
+    gatewayDialogSpark.innerHTML = parts.join("");
   }
   if (openclawGatewayMore) {
     openclawGatewayMore.addEventListener("click", openGatewayDialog);
@@ -714,6 +804,9 @@
         `最后探测: ${gatewayDialogWhen.textContent}`,
         `探测用时: ${gatewayDialogDuration.textContent}`,
         `探测命令: ${gatewayDialogCmd.textContent}`,
+        `Gateway PID: ${gatewayDialogPID ? gatewayDialogPID.textContent : "—"}`,
+        `观察到运行: ${gatewayDialogUptime ? gatewayDialogUptime.textContent : "—"}`,
+        `崩溃次数: ${gatewayDialogCrashes ? gatewayDialogCrashes.textContent : "0"}`,
       ];
       const err = gatewayDialogError.textContent.trim();
       if (err) lines.push("", "错误信息:", err);

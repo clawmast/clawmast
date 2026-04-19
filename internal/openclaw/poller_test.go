@@ -102,3 +102,131 @@ func TestSetIntentRoundTrip(t *testing.T) {
 		t.Fatalf("after stopped: want %q got %q", IntentStopped, got)
 	}
 }
+
+// TestAppendProbeSampleTrimsToBound covers the ring buffer contract:
+// appending beyond ProbeHistoryLen drops the oldest entries so the
+// slice never grows unbounded. The sample at index 0 after N+k
+// appends must be the (k+1)-th sample we inserted.
+func TestAppendProbeSampleTrimsToBound(t *testing.T) {
+	var history []ProbeSample
+	const extra = 5
+	total := ProbeHistoryLen + extra
+	for i := range total {
+		history = appendProbeSample(history, ProbeSample{
+			At:      "t",
+			Alive:   true,
+			ProbeMS: int64(i),
+		})
+	}
+	if got := len(history); got != ProbeHistoryLen {
+		t.Fatalf("history length: want %d got %d", ProbeHistoryLen, got)
+	}
+	// Oldest surviving entry should be the (extra)-th insertion, since
+	// we dropped the first `extra` samples.
+	if got := history[0].ProbeMS; got != int64(extra) {
+		t.Fatalf("oldest sample: want ProbeMS=%d got %d", extra, got)
+	}
+	// Newest entry is always the last insertion.
+	if got := history[len(history)-1].ProbeMS; got != int64(total-1) {
+		t.Fatalf("newest sample: want ProbeMS=%d got %d", total-1, got)
+	}
+}
+
+// TestAppendProbeSampleDoesNotAliasInput guards against a sneaky
+// aliasing bug where a caller keeps a reference to the pre-append
+// slice and expects it untouched. appendProbeSample allocates fresh,
+// so mutating the returned slice must not leak back.
+func TestAppendProbeSampleDoesNotAliasInput(t *testing.T) {
+	orig := []ProbeSample{{ProbeMS: 1}, {ProbeMS: 2}}
+	out := appendProbeSample(orig, ProbeSample{ProbeMS: 3})
+	out[0].ProbeMS = 999
+	if orig[0].ProbeMS != 1 {
+		t.Fatalf("append mutated input slice: orig[0]=%d", orig[0].ProbeMS)
+	}
+}
+
+// TestProbeNowCountsCrashEdge pins the alive=true→false transition
+// counter. Two probes with a fake bin that flips from ok to error
+// should produce exactly one crash increment; a subsequent still-down
+// probe must not re-count.
+func TestProbeNowCountsCrashEdge(t *testing.T) {
+	// A script that reads a counter file and alternates behaviour.
+	// Call 1 returns alive; calls 2+ exit non-zero (unhealthy).
+	dir := t.TempDir()
+	counter := dir + "/n"
+	bin := writeFakeBin(t, `
+n=0
+if [ -f `+counter+` ]; then n=$(cat `+counter+`); fi
+n=$((n+1))
+echo $n > `+counter+`
+if [ "$n" = "1" ]; then
+  echo '{"ok":true,"ts":1,"sessions":{"count":0}}'
+  exit 0
+fi
+echo '{"ok":false}'
+exit 1
+`)
+	m := NewManager(Runner{Binary: bin}, 0, silentLogger())
+
+	first := m.ProbeNow(context.Background())
+	if !first.Alive {
+		t.Fatalf("first probe: want alive, got %+v", first)
+	}
+	if first.CrashCount != 0 {
+		t.Fatalf("first probe: crash_count should be 0, got %d", first.CrashCount)
+	}
+
+	second := m.ProbeNow(context.Background())
+	if second.Alive {
+		t.Fatalf("second probe: want !alive, got %+v", second)
+	}
+	if second.CrashCount != 1 {
+		t.Fatalf("crash edge: want count=1 got %d", second.CrashCount)
+	}
+
+	third := m.ProbeNow(context.Background())
+	if third.Alive {
+		t.Fatalf("third probe: want !alive, got %+v", third)
+	}
+	if third.CrashCount != 1 {
+		t.Fatalf("sustained-down must not re-count: want 1 got %d", third.CrashCount)
+	}
+}
+
+// TestProbeNowInitialDownDoesNotCount guards the boot-time edge case:
+// if the very first probe reports !alive, we were never up to crash
+// from, so CrashCount must stay at 0. Without the Probed guard,
+// prev.Alive default-false vs next.Alive=false would be mis-read as a
+// transition (false→false, no edge), but a naive implementation that
+// only compared pointers or used true as the prev default would
+// miscount here.
+func TestProbeNowInitialDownDoesNotCount(t *testing.T) {
+	bin := writeFakeBin(t, `echo '{"ok":false}'; exit 1`)
+	m := NewManager(Runner{Binary: bin}, 0, silentLogger())
+	snap := m.ProbeNow(context.Background())
+	if snap.Alive {
+		t.Fatalf("want !alive on initial down probe")
+	}
+	if snap.CrashCount != 0 {
+		t.Fatalf("initial down must not count as crash: got %d", snap.CrashCount)
+	}
+}
+
+// TestProbeNowAppendsHistory verifies every ProbeNow lands one sample
+// in ProbeHistory, newest-last, and the alive bit reflects that probe.
+func TestProbeNowAppendsHistory(t *testing.T) {
+	bin := writeFakeBin(t, `echo '{"ok":true,"ts":1,"sessions":{"count":0}}'; exit 0`)
+	m := NewManager(Runner{Binary: bin}, 0, silentLogger())
+	for range 3 {
+		m.ProbeNow(context.Background())
+	}
+	snap := m.Get()
+	if got := len(snap.ProbeHistory); got != 3 {
+		t.Fatalf("history len: want 3 got %d", got)
+	}
+	for i, s := range snap.ProbeHistory {
+		if !s.Alive {
+			t.Fatalf("sample %d: want alive, got %+v", i, s)
+		}
+	}
+}
