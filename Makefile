@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill playground-up playground-down playground-status playground-publish playground-nuke clean
 
 build: build-worker build-supervisor build-release
 
@@ -116,6 +116,27 @@ release-smoke:
 # graceful SIGTERM on clawmastd.
 supervisor-drill:
 	bash scripts/supervisor-drill.sh
+
+# Auto-update playground — persistent local environment for clicking
+# through the update flow in a real browser. See scripts/playground.sh
+# for the full subcommand surface. Unlike the *-smoke targets, this
+# does not tear itself down; use `make playground-down` to stop or
+# `make playground-nuke` to also wipe the install tree.
+playground-up:
+	bash scripts/playground.sh up
+
+playground-down:
+	bash scripts/playground.sh down
+
+playground-status:
+	bash scripts/playground.sh status
+
+# Usage: make playground-publish V=v0.1.1-playground CHAN=stable
+playground-publish:
+	bash scripts/playground.sh publish $(V) $(CHAN)
+
+playground-nuke:
+	bash scripts/playground.sh nuke
 
 clean:
 	rm -rf bin/ dist/
