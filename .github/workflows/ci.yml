@@ -37,6 +37,8 @@ jobs:
         run: go test -race -v ./...
       - name: smoke (build + run version with injected ldflags)
         run: make smoke
+      - name: install-smoke (installer layout + daemon round-trip)
+        run: make install-smoke
       - name: cli-smoke (status / doctor / logs against throwaway tree)
         run: make cli-smoke
 

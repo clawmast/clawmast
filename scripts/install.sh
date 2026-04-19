@@ -193,8 +193,12 @@ ensure_binaries() {
 # Version resolution ---------------------------------------------------------
 
 derive_version() {
+  # `clawmast version` prints `<Version> (<Commit>, <BuildTime>, <GoVersion>)`
+  # (see internal/version.Full). We want the first whitespace-separated
+  # token; tr strips stray commas / parens so a format shift into a
+  # trailing-comma cell never leaks into the directory name.
   local v
-  v="$("${BIN_DIR}/clawmast" version 2>/dev/null | awk '{print $3}' | tr -d ' ' || true)"
+  v="$("${BIN_DIR}/clawmast" version 2>/dev/null | awk '{print $1}' | tr -d ' ,()' || true)"
   [[ -n "${v}" ]] || v="dev"
   # Strip leading "v" so the label matches $(git describe --tags)'s
   # bare form while the directory reads naturally.
