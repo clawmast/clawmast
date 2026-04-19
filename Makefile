@@ -13,7 +13,7 @@ LDFLAGS := -s -w \
 	-X github.com/clawmast/clawmast/internal/version.Commit=$(COMMIT) \
 	-X github.com/clawmast/clawmast/internal/version.BuildTime=$(BUILDTIME)
 
-.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill playground-up playground-down playground-status playground-publish playground-nuke clean
+.PHONY: build build-worker build-supervisor build-release test lint vet tidy snapshot smoke install uninstall install-smoke rollback-smoke upgrade-smoke blacklist-smoke update-smoke update-install-smoke update-health-smoke release-smoke supervisor-drill playground-up playground-down playground-status playground-publish playground-nuke clean
 
 build: build-worker build-supervisor build-release
 
@@ -58,6 +58,12 @@ smoke: build
 # override the default ~/.clawmast install root.
 install: build
 	bash scripts/install.sh --source local
+
+# Tear down the user-level service and wipe the install root. Honours
+# CLAWMAST_HOME; pass --keep-data to preserve state/ data/ logs/ keys/.
+# Intended as the counterpart to `make install` for L2 dogfood testing.
+uninstall:
+	bash scripts/uninstall.sh --yes
 
 # CI-friendly smoke test: installs into a throwaway prefix with --no-service
 # and verifies the on-disk layout + a clawmastd boot/shutdown round-trip.

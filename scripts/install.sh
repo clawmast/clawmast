@@ -198,6 +198,17 @@ install_binaries() {
   install -m 0755 "${src}/clawmast" "${vdir}/clawmast.new"
   mv -f "${vdir}/clawmast.new" "${vdir}/clawmast"
   log "installed worker: ${vdir}/clawmast"
+
+  # On macOS, strip the com.apple.quarantine xattr Gatekeeper sets on
+  # files that arrived via LaunchServices (browsers, AirDrop). Go's
+  # net/http auto-updater path does not set it, so this is a no-op for
+  # auto-update; it only matters when the user downloaded a release
+  # tarball in Safari and is running install.sh out of ~/Downloads.
+  # Failure is non-fatal — xattr may be absent in minimal shells.
+  if [[ "${OS}" == "darwin" ]] && command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "${PREFIX}/bin/clawmastd" 2>/dev/null || true
+    xattr -dr com.apple.quarantine "${vdir}/clawmast"        2>/dev/null || true
+  fi
 }
 
 write_manifest() {
