@@ -161,6 +161,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/settings/channel", s.handleChannelGet)
 	s.mux.HandleFunc("POST /api/settings/channel", s.handleChannelSet)
 	s.mux.HandleFunc("GET /api/openclaw/status", s.handleOpenclawStatus)
+	s.mux.HandleFunc("GET /api/openclaw/action/log", s.handleOpenclawActionLog)
 	s.mux.HandleFunc("POST /api/openclaw/fix", s.handleOpenclawFix)
 	s.mux.HandleFunc("POST /api/openclaw/action", s.handleOpenclawAction)
 

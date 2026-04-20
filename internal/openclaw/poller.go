@@ -3,6 +3,7 @@ package openclaw
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -95,6 +96,14 @@ type Manager struct {
 	// probe landing (typically 1–3 s on macOS launchd cold start, up
 	// to 15 s on a cold Node process). Zero = never attempted.
 	lastStartAttemptAt atomic.Int64
+	// actionLogMu guards actionLog. The log survives a page refresh
+	// so a new client session can replay the events that streamed
+	// while the JS context was being rebuilt — without it the CLI
+	// output emitted during a restart's ~12 s window is lost to any
+	// operator who reloaded mid-stream. One log slot per Manager; a
+	// new setCurrentAction(non-empty) resets it.
+	actionLogMu sync.Mutex
+	actionLog   ActionLogEntry
 }
 
 // NewManager constructs a Manager. A nil logger defaults to
@@ -368,12 +377,18 @@ func (m *Manager) SetIntent(intent Intent) {
 // with a deferred clearCurrentAction so a panic cannot leave the
 // flag stuck. Empty name clears the slot (same as
 // clearCurrentAction, kept as a convenience for tests).
+//
+// Non-empty calls also reset the action log so a subsequent
+// refresh-replay sees only events from the current run. Leaving the
+// previous action's events in the buffer would cause the new
+// action's replay to mix commands from two different verbs.
 func (m *Manager) setCurrentAction(name string) {
 	if name == "" {
 		m.currentAction.Store(nil)
 		return
 	}
 	m.currentAction.Store(&name)
+	m.resetActionLog(name)
 }
 
 // clearCurrentAction resets the in-flight slot to empty.

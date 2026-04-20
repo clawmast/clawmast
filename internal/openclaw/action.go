@@ -91,19 +91,24 @@ func RunAction(ctx context.Context, m *Manager, evCh chan<- StepEvent, a Action)
 	m.setCurrentAction(string(a))
 	defer m.clearCurrentAction()
 	if !ValidAction(string(a)) {
-		evCh <- StepEvent{
+		ev := StepEvent{
 			Step:    StepID("action-" + string(a)),
 			Phase:   "end",
 			Outcome: OutcomeFailed,
 			Note:    fmt.Sprintf("unknown action %q", string(a)),
 		}
+		m.RecordActionEvent(ev)
+		evCh <- ev
+		m.FinalizeActionLog(string(OutcomeFailed))
 		return
 	}
 
 	id := actionStepID(a)
 	argv := actionArgv(a)
 	cmdStr := joinArgv(append([]string{"openclaw"}, argv...))
-	evCh <- StepEvent{Step: id, Phase: "start", Command: cmdStr}
+	startEv := StepEvent{Step: id, Phase: "start", Command: cmdStr}
+	m.RecordActionEvent(startEv)
+	evCh <- startEv
 
 	runner, _ := m.resolveRunner()
 	res, err := runner.runCmd(ctx, actionTimeout(a), argv...)
@@ -126,6 +131,7 @@ func RunAction(ctx context.Context, m *Manager, evCh chan<- StepEvent, a Action)
 		end.StdoutTail = trimErr(res.Stdout)
 		end.StderrTail = trimErr(res.Stderr)
 	}
+	m.RecordActionEvent(end)
 	evCh <- end
 
 	// Stamp the warmup-grace anchor for any start/restart attempt,
@@ -155,4 +161,15 @@ func RunAction(ctx context.Context, m *Manager, evCh chan<- StepEvent, a Action)
 	pctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
 	defer cancel()
 	m.ProbeNow(pctx)
+
+	// Finalize the log AFTER ProbeNow so a replay client that fetches
+	// /api/openclaw/action/log the instant it sees running=false in
+	// the entry also sees a fully-settled /status snapshot on its
+	// next poll. Mirrors the handler's actionFinalOutcome: "ok" on
+	// success, the raw Timeout/Failed wire value on anything else.
+	finalOutcome := string(OutcomeOK)
+	if outcome != "" && outcome != OutcomeOK {
+		finalOutcome = string(outcome)
+	}
+	m.FinalizeActionLog(finalOutcome)
 }

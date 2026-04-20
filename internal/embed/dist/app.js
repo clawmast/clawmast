@@ -444,6 +444,14 @@
     if (serverAction && !activeAction && ACTION_PENDING[serverAction]) {
       activeAction = serverAction;
       activeActionFromServer = true;
+      // Replay the CLI output we missed while the JS was reloading.
+      // Fires exactly once per adoption: replayedActionLogFor holds
+      // the verb whose log has already been drained into the console
+      // so the 1 s poll cadence doesn't re-fetch every tick.
+      if (replayedActionLogFor !== serverAction) {
+        replayedActionLogFor = serverAction;
+        replayActionLogFromServer(serverAction);
+      }
     }
     if (!serverAction && activeActionFromServer) {
       // Server-owned action finished and we have no local stream —
@@ -452,6 +460,13 @@
       for (const b of actionButtons) b.dataset.loading = "0";
       activeAction = null;
       activeActionFromServer = false;
+      // Paint completion from the final log entry so the console
+      // transitions from 运行中 to 完成/失败 even though we never
+      // saw the final NDJSON event (it streamed to /dev/null after
+      // the refresh). Best-effort; failures leave the console in
+      // its current state, which is better than lying.
+      finalizeActionLogDisplay();
+      replayedActionLogFor = null;
     }
 
     // Freeze the card against stream events for a LOCAL click: while
@@ -639,6 +654,13 @@
   //           the normal phase-driven render without a stream to end.
   let activeAction = null;
   let activeActionFromServer = false;
+  // replayedActionLogFor gates the one-shot log fetch on adoption:
+  // renderOpenClaw runs on every 1 s poll, but the buffered-log pull
+  // only needs to happen on the first frame where we transition from
+  // "no local action, server idle" to "server has an action". Reset
+  // to null when the server-owned action clears so a subsequent
+  // different action can adopt cleanly.
+  let replayedActionLogFor = null;
 
   // Actions that interrupt active sessions prompt first. The copy
   // adapts to the current sessions_count so "1 个会话" vs "当前没有
@@ -1058,6 +1080,63 @@
       // after stream close.
       pollOpenClaw();
     }
+  }
+
+  // replayActionLogFromServer fills the console with the buffered
+  // StepEvents for the action the backend is currently tracking. Runs
+  // exactly once per adoption (see replayedActionLogFor) so the 1 s
+  // status poll doesn't re-paint the console on every tick. If the
+  // entry has already finished by the time we fetch it — possible
+  // when a refresh lands right at the tail of a short action — we
+  // paint the completion state immediately instead of leaving the
+  // console stuck on 运行中.
+  async function replayActionLogFromServer(name) {
+    try {
+      const res = await fetch("/api/openclaw/action/log", withAuth());
+      if (!res.ok) return;
+      const entry = await res.json();
+      // The server may have already moved on to a different action
+      // between adoption and our fetch landing; bail if the name no
+      // longer matches so we don't splice events from two verbs.
+      if (!entry || entry.name !== name) return;
+      consoleLog.replaceChildren();
+      setConsoleHasLog(false);
+      setConsoleOutcome(null);
+      setConsoleLabel(`${ACTION_LABELS[name]} · 运行中…`);
+      setConsoleState("running");
+      for (const ev of (entry.events || [])) applyStreamEvent(ev);
+      if (!entry.running) paintActionCompletion(name, entry.outcome || "ok");
+    } catch { /* best effort */ }
+  }
+
+  // finalizeActionLogDisplay pulls the log one last time after the
+  // server clears current_action so the console transitions from
+  // 运行中 to 完成/失败 for refresh-adopted actions (a local stream
+  // would have flipped these via runAction's finally block, but an
+  // adopted action has no finally to run). Silent on fetch failure —
+  // the next action's click will reset the console anyway.
+  async function finalizeActionLogDisplay() {
+    try {
+      const res = await fetch("/api/openclaw/action/log", withAuth());
+      if (!res.ok) return;
+      const entry = await res.json();
+      if (!entry || !entry.name || entry.running) return;
+      paintActionCompletion(entry.name, entry.outcome || "ok");
+    } catch { /* best effort */ }
+  }
+
+  // paintActionCompletion flips the console from "running" to its
+  // terminal state, matching what runAction's finally does for local
+  // clicks. Shared by the one-shot replay (short actions that were
+  // already done when we fetched) and the finalize-display pull
+  // (long actions that completed after adoption).
+  function paintActionCompletion(name, outcome) {
+    const ok = outcome === "ok";
+    setConsoleOutcome(ok ? "ok" : "err");
+    setConsoleLabel(
+      ok ? `${ACTION_LABELS[name]} · 完成` : `${ACTION_LABELS[name]} · 失败`,
+    );
+    setConsoleState("expanded");
   }
 
   // consumeNDJSON reads a ReadableStream and invokes onEvent for each

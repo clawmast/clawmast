@@ -25,6 +25,29 @@ func (s *Server) handleOpenclawStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.openclaw.Get())
 }
 
+// handleOpenclawActionLog returns the most recent action's buffered
+// StepEvents so a client that refreshed mid-stream can replay the CLI
+// output it would otherwise have missed. Shape matches what the live
+// NDJSON stream delivers: each element of `events` is a StepEvent the
+// UI can pass straight to applyStreamEvent. `running` distinguishes
+// "still going, keep polling /status" from "finished, paint outcome
+// and move on".
+//
+// The entry persists until the NEXT action starts (setCurrentAction
+// with a non-empty name resets the buffer), so a refresh landing
+// after the action finished but before the user clicks again still
+// sees the full transcript. When no action has ever run, `name` is
+// empty and `events` is an empty array.
+func (s *Server) handleOpenclawActionLog(w http.ResponseWriter, _ *http.Request) {
+	if s.openclaw == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "openclaw integration disabled",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.openclaw.ActionLog())
+}
+
 // handleOpenclawFix runs the Fix cascade and streams StepEvents as
 // NDJSON (one JSON object per line). NDJSON is chosen over SSE so the
 // browser client can use fetch+ReadableStream without an EventSource

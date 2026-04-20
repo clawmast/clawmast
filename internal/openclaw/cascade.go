@@ -69,27 +69,46 @@ func Cascade(ctx context.Context, m *Manager, evCh chan<- StepEvent) {
 
 	m.setCurrentAction("fix")
 	defer m.clearCurrentAction()
+	// finalizeFixLog stamps the log's Running/Outcome mirroring the
+	// handler's finalOutcome: "ok" when the gateway is alive after
+	// the cascade, "failed" otherwise. Called on every exit path
+	// (early T1/T2 health hit and the T3 fall-through) so a replay
+	// client always sees a settled entry once CurrentAction clears.
+	finalizeFixLog := func() {
+		outcome := "failed"
+		if m.Get().Alive {
+			outcome = "ok"
+		}
+		m.FinalizeActionLog(outcome)
+	}
 
 	runStep(ctx, m, evCh, StepDoctor, doctorTimeout, []string{"doctor", "--fix"})
 	if healthyAfter(ctx, m) {
 		m.stampStartAttempt(time.Now().UTC())
+		finalizeFixLog()
 		return
 	}
 
 	runStep(ctx, m, evCh, StepGatewayRestart, gatewayTimeout, []string{"gateway", "restart"})
 	if healthyAfter(ctx, m) {
 		m.stampStartAttempt(time.Now().UTC())
+		finalizeFixLog()
 		return
 	}
 
 	// T3 is OS-specific and does not go through the openclaw CLI.
 	argv, note := osRestartCommand()
 	if argv == nil {
-		evCh <- StepEvent{Step: StepOSRestart, Phase: "start", Command: "", Note: note}
-		evCh <- StepEvent{Step: StepOSRestart, Phase: "end", Outcome: OutcomeSkipped, Note: note}
+		startEv := StepEvent{Step: StepOSRestart, Phase: "start", Command: "", Note: note}
+		m.RecordActionEvent(startEv)
+		evCh <- startEv
+		endEv := StepEvent{Step: StepOSRestart, Phase: "end", Outcome: OutcomeSkipped, Note: note}
+		m.RecordActionEvent(endEv)
+		evCh <- endEv
+		finalizeFixLog()
 		return
 	}
-	runSystemStep(ctx, evCh, StepOSRestart, osRestartTimeout, argv)
+	runSystemStep(ctx, m, evCh, StepOSRestart, osRestartTimeout, argv)
 	// Final probe regardless of T3 exit code so the UI sees the real
 	// state when the cascade finishes. Stamp unconditionally: T3 is a
 	// "best effort revive", and the warmup window is exactly where we
@@ -98,6 +117,7 @@ func Cascade(ctx context.Context, m *Manager, evCh chan<- StepEvent) {
 	// expires into PhaseError on genuine failure.
 	m.stampStartAttempt(time.Now().UTC())
 	m.ProbeNow(ctx)
+	finalizeFixLog()
 }
 
 // runStep spawns an openclaw CLI command with the given timeout and
@@ -105,7 +125,9 @@ func Cascade(ctx context.Context, m *Manager, evCh chan<- StepEvent) {
 // Timeout for killed-by-ctx-deadline, and Failed otherwise.
 func runStep(ctx context.Context, m *Manager, evCh chan<- StepEvent, id StepID, timeout time.Duration, args []string) {
 	cmdStr := joinArgv(append([]string{"openclaw"}, args...))
-	evCh <- StepEvent{Step: id, Phase: "start", Command: cmdStr}
+	startEv := StepEvent{Step: id, Phase: "start", Command: cmdStr}
+	m.RecordActionEvent(startEv)
+	evCh <- startEv
 	runner, _ := m.resolveRunner()
 	res, err := runner.runCmd(ctx, timeout, args...)
 	outcome := OutcomeOK
@@ -128,6 +150,7 @@ func runStep(ctx context.Context, m *Manager, evCh chan<- StepEvent, id StepID, 
 		end.StdoutTail = trimErr(res.Stdout)
 		end.StderrTail = trimErr(res.Stderr)
 	}
+	m.RecordActionEvent(end)
 	evCh <- end
 }
 
@@ -135,10 +158,12 @@ func runStep(ctx context.Context, m *Manager, evCh chan<- StepEvent, id StepID, 
 // with an arbitrary binary (launchctl / systemctl) rather than
 // openclaw. We inline the exec logic here to avoid tangling it with
 // the openclaw-only path above.
-func runSystemStep(ctx context.Context, evCh chan<- StepEvent, id StepID, timeout time.Duration, argv []string) {
+func runSystemStep(ctx context.Context, m *Manager, evCh chan<- StepEvent, id StepID, timeout time.Duration, argv []string) {
 	r := Runner{Binary: argv[0]}
 	cmdStr := joinArgv(argv)
-	evCh <- StepEvent{Step: id, Phase: "start", Command: cmdStr}
+	startEv := StepEvent{Step: id, Phase: "start", Command: cmdStr}
+	m.RecordActionEvent(startEv)
+	evCh <- startEv
 	res, err := r.runCmd(ctx, timeout, argv[1:]...)
 	outcome := OutcomeOK
 	note := ""
@@ -159,6 +184,7 @@ func runSystemStep(ctx context.Context, evCh chan<- StepEvent, id StepID, timeou
 		end.StdoutTail = trimErr(res.Stdout)
 		end.StderrTail = trimErr(res.Stderr)
 	}
+	m.RecordActionEvent(end)
 	evCh <- end
 }
 
