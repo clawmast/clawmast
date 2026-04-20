@@ -31,9 +31,11 @@ func (s *Server) handleOpenclawStatus(w http.ResponseWriter, _ *http.Request) {
 // dance, and so curl operators can see raw output.
 //
 // Total cascade budget is the sum of per-tier timeouts plus
-// probe-between-tiers overhead: ~30+5+15+5+10 = 65s. The request
-// context gets a 90s guardrail so a pathological hang eventually frees
-// the connection.
+// probe-between-tiers overhead: ~30+5+15+5+10 = 65s. The action
+// context is detached from r.Context() so a page refresh or tab close
+// does not kill the cascade mid-tier — the Phase state machine and
+// the Manager's currentAction/lastStartAttemptAt fields stay coherent
+// for any subsequent client that polls /api/openclaw/status.
 func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 	if s.openclaw == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -52,7 +54,10 @@ func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	enc := json.NewEncoder(w)
 
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	// Detached from r.Context(): a disconnecting client must not
+	// cancel the cascade. The 90s guardrail ensures a pathological
+	// hang eventually frees the spawned CLI goroutine.
+	actionCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	// Fix's intent is "make the gateway alive"; record it so a failure
@@ -60,21 +65,33 @@ func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 	s.openclaw.SetIntent(openclaw.IntentRunning)
 
 	evCh := make(chan openclaw.StepEvent, 8)
-	go openclaw.Cascade(ctx, s.openclaw, evCh)
+	go openclaw.Cascade(actionCtx, s.openclaw, evCh)
 
-	for ev := range evCh {
-		if err := enc.Encode(ev); err != nil {
-			// Client disconnected or the response is broken; nothing
-			// useful to do except stop the cascade and drain the chan.
-			cancel()
-			for range evCh {
+	clientDone := r.Context().Done()
+	for {
+		select {
+		case ev, ok := <-evCh:
+			if !ok {
+				goto emitFinal
 			}
+			if err := enc.Encode(ev); err != nil {
+				// Response broken but cascade still runs; drain evCh
+				// in a goroutine so Cascade can complete and stamp
+				// lastStartAttemptAt. Do NOT cancel actionCtx.
+				go drainEvents(evCh)
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case <-clientDone:
+			// Browser refreshed / tab closed. Keep the cascade alive
+			// so the gateway actually gets repaired; drain silently.
+			go drainEvents(evCh)
 			return
 		}
-		if flusher != nil {
-			flusher.Flush()
-		}
 	}
+emitFinal:
 	// Emit one terminal event with the post-cascade snapshot so the
 	// UI can render the final state without a follow-up GET.
 	final := struct {
@@ -93,6 +110,16 @@ func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 	_ = enc.Encode(final)
 	if flusher != nil {
 		flusher.Flush()
+	}
+}
+
+// drainEvents consumes every remaining StepEvent from evCh so that
+// RunAction / Cascade never block on a send when the HTTP client
+// disconnected mid-stream. The background action goroutine continues
+// to completion and stamps currentAction / lastStartAttemptAt so the
+// Phase state machine stays accurate after a page refresh.
+func drainEvents(evCh <-chan openclaw.StepEvent) {
+	for range evCh {
 	}
 }
 
@@ -142,7 +169,15 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 
 	// 45s is the conservative upper bound: 30s doctor + 5s post-probe +
 	// a margin for slow Node startup. All four actions fit within this.
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	//
+	// Detached from r.Context(): the CLI invocation must survive a
+	// browser refresh or tab close. If the action were tied to the
+	// HTTP request, a refresh during restart would SIGKILL the
+	// openclaw CLI mid-run — the Manager's lastStartAttemptAt would
+	// never get stamped, so the Phase state machine would fall
+	// through to "error" as soon as the warmup grace expired, even
+	// though the user's intent was merely to reconnect the UI.
+	actionCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	// Record the user's stated intent before dispatching so the UI
@@ -154,7 +189,7 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	evCh := make(chan openclaw.StepEvent, 4)
-	go openclaw.RunAction(ctx, s.openclaw, evCh, openclaw.Action(name))
+	go openclaw.RunAction(actionCtx, s.openclaw, evCh, openclaw.Action(name))
 
 	// cliOutcome captures the CLI step's own verdict so the terminal
 	// "final" event reports it faithfully. Before this was derived from
@@ -162,20 +197,35 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 	// a successful restart to "重启失败" whenever the gateway took more
 	// than a couple of seconds to answer health after coming up.
 	var cliOutcome openclaw.StepOutcome
-	for ev := range evCh {
-		if ev.Phase == "end" && ev.Outcome != "" {
-			cliOutcome = ev.Outcome
-		}
-		if err := enc.Encode(ev); err != nil {
-			cancel()
-			for range evCh {
+	clientDone := r.Context().Done()
+	for {
+		select {
+		case ev, ok := <-evCh:
+			if !ok {
+				goto emitFinal
 			}
+			if ev.Phase == "end" && ev.Outcome != "" {
+				cliOutcome = ev.Outcome
+			}
+			if err := enc.Encode(ev); err != nil {
+				// Response broken but RunAction still runs; drain
+				// silently so currentAction and lastStartAttemptAt
+				// still get stamped.
+				go drainEvents(evCh)
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case <-clientDone:
+			// Browser refreshed / tab closed. Keep the CLI running
+			// so the Phase state machine reports the real outcome
+			// to whichever client polls /api/openclaw/status next.
+			go drainEvents(evCh)
 			return
 		}
-		if flusher != nil {
-			flusher.Flush()
-		}
 	}
+emitFinal:
 	// Final event carries the fresh snapshot so the UI can update the
 	// status card without a follow-up GET.
 	final := struct {

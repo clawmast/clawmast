@@ -58,16 +58,27 @@ const (
 // when it finishes. The caller is expected to read evCh in a goroutine
 // or the writes will block — for the HTTP handler that's fine because
 // it streams straight into an NDJSON body.
+//
+// Marks currentAction="fix" for the cascade's lifetime so (a) autoheal
+// stands down while a fix is in progress (prevents an autoheal re-fire
+// racing with the user's click) and (b) ComputePhase elects
+// PhaseStarting so the badge stays blue/breathing through the cascade
+// instead of flashing 异常 between T1's restart and T1's readiness.
 func Cascade(ctx context.Context, m *Manager, evCh chan<- StepEvent) {
 	defer close(evCh)
 
+	m.setCurrentAction("fix")
+	defer m.clearCurrentAction()
+
 	runStep(ctx, m, evCh, StepDoctor, doctorTimeout, []string{"doctor", "--fix"})
 	if healthyAfter(ctx, m) {
+		m.stampStartAttempt(time.Now().UTC())
 		return
 	}
 
 	runStep(ctx, m, evCh, StepGatewayRestart, gatewayTimeout, []string{"gateway", "restart"})
 	if healthyAfter(ctx, m) {
+		m.stampStartAttempt(time.Now().UTC())
 		return
 	}
 
@@ -80,7 +91,12 @@ func Cascade(ctx context.Context, m *Manager, evCh chan<- StepEvent) {
 	}
 	runSystemStep(ctx, evCh, StepOSRestart, osRestartTimeout, argv)
 	// Final probe regardless of T3 exit code so the UI sees the real
-	// state when the cascade finishes.
+	// state when the cascade finishes. Stamp unconditionally: T3 is a
+	// "best effort revive", and the warmup window is exactly where we
+	// want the UI to stay blue while the OS restart settles — the next
+	// probe will promote to PhaseRunning on success or the grace
+	// expires into PhaseError on genuine failure.
+	m.stampStartAttempt(time.Now().UTC())
 	m.ProbeNow(ctx)
 }
 

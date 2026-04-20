@@ -10,6 +10,16 @@ import (
 // flat JSON for direct wire exposure on /api/openclaw/status. All time
 // fields are UTC RFC 3339 strings; zero values are rendered as "".
 type Snapshot struct {
+	// Phase is the computed lifecycle state — the single source of
+	// truth for the UI badge. Derived from Probed/Alive/Intent/
+	// CLIMissing plus the Manager's currentAction and
+	// lastStartAttemptAt via ComputePhase. Exposed on the wire so the
+	// UI can switch on it directly without re-deriving the decision
+	// table client-side (which historically caused Probed/Alive/Intent
+	// to drift out of agreement after refactors). Survives page
+	// refreshes because the warmup-grace timestamp lives on the
+	// backend. See phase.go for the full decision matrix.
+	Phase Phase `json:"phase"`
 	// Probed is true once the poller has written at least once. When
 	// false, the UI renders "checking..." rather than "down".
 	Probed bool `json:"probed"`
@@ -119,6 +129,33 @@ type Snapshot struct {
 	// stays tiny even over a long session. The UI plots probe_ms as a
 	// sparkline with red markers for alive=false ticks.
 	ProbeHistory []ProbeSample `json:"probe_history,omitempty"`
+
+	// AutohealEnabled mirrors AutohealConfig.Enabled so the UI can
+	// show a row in the diagnostic dialog. Always on the wire (even
+	// when false) so a future UI toggle could key on it; the renderer
+	// today hides the row when disabled.
+	AutohealEnabled bool `json:"autoheal_enabled"`
+	// AutohealCount tallies the number of autoheal triggers fired
+	// since the clawmast process started (in-memory, resets on
+	// restart — same semantics as CrashCount).
+	AutohealCount int `json:"autoheal_count"`
+	// AutohealLastAt is the RFC 3339 timestamp of the most recent
+	// autoheal trigger. Empty when autoheal has never fired.
+	AutohealLastAt string `json:"autoheal_last_at,omitempty"`
+	// AutohealNextEligibleAt is the RFC 3339 timestamp at which the
+	// cooldown expires and autoheal is eligible to fire again. Empty
+	// before the first trigger. The UI derives "cooldown remaining"
+	// as (next_eligible − now).
+	AutohealNextEligibleAt string `json:"autoheal_next_eligible_at,omitempty"`
+
+	// AutohealConsecutiveDown counts back-to-back alive=false probes
+	// since the last alive=true tick. Reset to 0 on any alive probe
+	// and on autoheal trigger. Internal bookkeeping — not on the wire.
+	AutohealConsecutiveDown int `json:"-"`
+	// AutohealNextEligible is the authoritative time.Time form of
+	// AutohealNextEligibleAt. Kept alongside the string so tick-time
+	// cooldown checks do not re-parse RFC3339 on every probe.
+	AutohealNextEligible time.Time `json:"-"`
 }
 
 // ProbeSample is one entry in Snapshot.ProbeHistory. Kept as plain

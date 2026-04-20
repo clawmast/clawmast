@@ -24,7 +24,7 @@
   const openclawChannels = $("openclaw-channels");
   const openclawAgentRow = $("openclaw-agent-row");
   const openclawAgent = $("openclaw-agent");
-  const openclawProbed = $("openclaw-probed");
+
   // Structured health rows. Each row carries one signal; the card
   // composes them into the overall 运行中 / 异常 / 已停止 verdict
   // via the badge + button set.
@@ -45,6 +45,8 @@
   const gatewayDialogPID = $("gateway-dialog-pid");
   const gatewayDialogUptime = $("gateway-dialog-uptime");
   const gatewayDialogCrashes = $("gateway-dialog-crashes");
+  const gatewayDialogAutohealLabel = $("gateway-dialog-autoheal-label");
+  const gatewayDialogAutoheal = $("gateway-dialog-autoheal");
   const gatewayDialogSparkWrap = $("gateway-dialog-spark-wrap");
   const gatewayDialogSpark = $("gateway-dialog-spark");
   const gatewayDialogErrorWrap = $("gateway-dialog-error-wrap");
@@ -267,7 +269,7 @@
   }
 
   function setOpenclawTone(tone) {
-    openclawCard.classList.remove("tone-down", "tone-warn");
+    openclawCard.classList.remove("tone-down", "tone-warn", "tone-info");
     if (tone) openclawCard.classList.add(`tone-${tone}`);
   }
 
@@ -277,6 +279,7 @@
       "badge-healthy",
       "badge-error",
       "badge-pending",
+      "badge-starting",
     );
     openclawBadge.classList.add(`badge-${kind}`);
     openclawBadgeText.textContent = text;
@@ -377,6 +380,10 @@
       pidSinceISO: s.gateway_pid_since || "",
       crashCount: s.crash_count || 0,
       history: Array.isArray(s.probe_history) ? s.probe_history : [],
+      autohealEnabled: !!s.autoheal_enabled,
+      autohealCount: s.autoheal_count || 0,
+      autohealLastAtISO: s.autoheal_last_at || "",
+      autohealNextEligibleAtISO: s.autoheal_next_eligible_at || "",
       error: (errText || "").trim(),
     };
     openclawGatewayMore.hidden = false;
@@ -397,109 +404,131 @@
   }
 
   // applyPendingState paints the optimistic "action in flight" look on
-  // the card — badge turns amber with a breathing dot, sub explains
-  // what's happening, Gateway row mirrors the badge. All four action
-  // buttons are already disabled by runAction(); we leave them that
-  // way. The pending state is cleared when renderOpenClaw runs with
-  // activeAction=null after the action stream closes.
+  // the card the instant a button is clicked. The backend will catch
+  // up within 1–2 probes (the next ProbeNow sees currentAction set by
+  // RunAction and computes PhaseStarting), but rendering immediately
+  // avoids the ~500 ms window where the UI still shows 运行中 while
+  // the CLI spawn is already underway. Badge is blue/breathing for
+  // start/restart/fix and for stop — all four read as "busy" rather
+  // than "problem". The pending state is cleared when renderOpenClaw
+  // runs with activeAction=null after the action stream closes.
   function applyPendingState(name) {
     const p = ACTION_PENDING[name];
     if (!p) return;
-    setOpenclawBadge("pending", p.badge);
-    setOpenclawTone("warn");
+    setOpenclawBadge("starting", p.badge);
+    setOpenclawTone("info");
     setOpenclawSub(p.sub);
-    setGatewayRow("pending", p.row);
+    setGatewayRow("starting", p.row);
   }
 
+  // renderOpenClaw drives every visual on the OpenClaw card from the
+  // single Phase field on the Snapshot. The backend is the source of
+  // truth: no client-side re-derivation from alive/intent/cli_missing
+  // combinations (that two-sided decision table is what flapped the
+  // badge through 异常 during warmup before this refactor). Each phase
+  // branch owns its badge, tone, sub, Gateway row, and diag dialog —
+  // kept exhaustive and parallel so adding a new phase means adding
+  // exactly one case, not patching N call sites.
   function renderOpenClaw(s) {
     // Freeze the card while an action is streaming. The 1 s poller
-    // would otherwise repaint "异常" at the exact moment the gateway
-    // drops during a restart, only to flap back to "运行中" a second
-    // later. The sessions/channels/agent rows could safely update
-    // mid-flight but we freeze them too so the whole card reads as
-    // "mid-operation" rather than a half-updated mosaic.
+    // would otherwise race with the optimistic paint from
+    // applyPendingState during the first probe after the click.
     if (activeAction) return;
-    if (!s.probed) {
-      setOpenclawBadge("unknown", "检测中");
-      setActionState("unknown");
-      setOpenclawTone(null);
-      setOpenclawSub("连接本机 openclaw CLI 并探测网关状态");
-      setHealthRow(openclawRowService, openclawServiceText, "unknown", "检测中");
-      setGatewayRow("unknown", "检测中");
-      setGatewayDiag(null);
-      return;
-    }
-    if (s.cli_missing) {
-      setOpenclawBadge("error", "未安装");
-      setActionState("missing");
-      setOpenclawTone("down");
-      openclawChannelsRow.hidden = true;
-      openclawAgentRow.hidden = true;
-      openclawProbed.textContent = s.last_probe_at ? relStamp(s.last_probe_at) : "—";
-      setOpenclawSub("未安装 openclaw CLI · 请按官方文档完成安装");
-      setHealthRow(openclawRowService, openclawServiceText, "err", "openclaw CLI 未安装");
-      setGatewayRow("off", "—");
-      setGatewayDiag(null);
-      return;
+
+    const phase = s.phase || "";
+
+    // CLI row (shared across every non-missing phase): surface the
+    // resolved binary path + discovery source so operators can tell
+    // whether brew, an env override, or state/openclaw-path is
+    // winning. Painted before the switch because every alive-capable
+    // phase wants it; the missing branch overrides below.
+    if (phase !== "" && phase !== "missing") {
+      const cliBits = [];
+      if (s.binary_path) cliBits.push(s.binary_path);
+      if (s.binary_source) cliBits.push(`(${s.binary_source})`);
+      setHealthRow(openclawRowService, openclawServiceText, "ok",
+        cliBits.join(" ") || "已发现 openclaw");
     }
 
-    // CLI row — we always know the binary is available here (the
-    // cli_missing branch returned). Surface the resolved path + the
-    // discovery source tag so operators can tell whether the brew
-    // copy, an env override, or an explicit state/openclaw-path is
-    // winning; the Gateway row below carries the runtime verdict.
-    const cliBits = [];
-    if (s.binary_path) cliBits.push(s.binary_path);
-    if (s.binary_source) cliBits.push(`(${s.binary_source})`);
-    setHealthRow(openclawRowService, openclawServiceText, "ok", cliBits.join(" ") || "已发现 openclaw");
+    switch (phase) {
+      case "": // PhaseUnknown — pre-probe.
+        setOpenclawBadge("unknown", "检测中");
+        setActionState("unknown");
+        setOpenclawTone(null);
+        setOpenclawSub("连接本机 openclaw CLI 并探测网关状态");
+        setHealthRow(openclawRowService, openclawServiceText, "unknown", "检测中");
+        setGatewayRow("unknown", "检测中");
+        setGatewayDiag(null);
+        return;
 
-    // Intent takes precedence over alive. After a stop click the
-    // probe may briefly still see alive=true (service tearing down,
-    // port still bound) — trusting that would flap the badge back to
-    // 运行中 until the next 3s tick. Intent = stopped means the user
-    // asked for it; render 已停止 and let the poller reconcile. The
-    // reverse is also true for running intent: if the user just
-    // clicked start/restart/fix, trust the observed alive (running
-    // intent + alive=false = 异常, which is the point).
-    if (s.intent === "stopped") {
-      setOpenclawBadge("unknown", "已停止");
-      setActionState("stopped");
-      setOpenclawTone(null);
-      setOpenclawSub("已手动停止 · 点击启动重新拉起");
-      setGatewayRow("off", "已停止");
-      setGatewayDiag(s, "已停止", "");
-    } else if (s.alive) {
-      setOpenclawBadge("healthy", "运行中");
-      setActionState("online");
-      setOpenclawTone(null);
-      const bits = [];
-      bits.push(s.version ? `v${s.version}` : "OpenClaw");
-      bits.push(gatewayEndpoint(s));
-      setOpenclawSub(bits.join(" · "));
-      setGatewayRow("ok", "运行中");
-      setGatewayDiag(s, "运行中", "");
-    } else {
-      // !alive with no explicit "stopped" intent = abnormal. Either it
-      // crashed or it never came up; either way the operator should
-      // run 一键修复 or fall back to 启动. The raw probe_error is
-      // moved into the Gateway diagnostic dialog (chevron on the row),
-      // so the card surface stays a single word.
-      setOpenclawBadge("error", "异常");
-      setActionState("offline");
-      setOpenclawTone("down");
-      setOpenclawSub("点击一键修复,或使用启动按钮手动拉起");
-      setGatewayRow("err", "未响应");
-      setGatewayDiag(s, "未响应", s.probe_error || "");
+      case "missing":
+        setOpenclawBadge("error", "未安装");
+        setActionState("missing");
+        setOpenclawTone("down");
+        openclawChannelsRow.hidden = true;
+        openclawAgentRow.hidden = true;
+        setOpenclawSub("未安装 openclaw CLI · 请按官方文档完成安装");
+        setHealthRow(openclawRowService, openclawServiceText, "err", "openclaw CLI 未安装");
+        setGatewayRow("off", "—");
+        setGatewayDiag(null);
+        return;
+
+      case "stopped":
+        setOpenclawBadge("unknown", "已停止");
+        setActionState("stopped");
+        setOpenclawTone(null);
+        setOpenclawSub("已手动停止 · 点击启动重新拉起");
+        setGatewayRow("off", "已停止");
+        setGatewayDiag(s, "已停止", "");
+        break;
+
+      case "starting":
+        // Backend is either (a) mid-action via currentAction or (b)
+        // inside the 15 s warmup-grace window after a successful
+        // start/restart/fix CLI return. Either way the operator's
+        // mental model is "it's coming up" — blue, breathing, no
+        // error. Even a page refresh during warmup keeps this state
+        // because lastStartAttemptAt lives on the Manager.
+        setOpenclawBadge("starting", "启动中");
+        setActionState("offline");
+        setOpenclawTone("info");
+        setOpenclawSub("正在启动 OpenClaw…");
+        setGatewayRow("starting", "启动中…");
+        setGatewayDiag(s, "启动中", "");
+        break;
+
+      case "running":
+        setOpenclawBadge("healthy", "运行中");
+        setActionState("online");
+        setOpenclawTone(null);
+        {
+          const bits = [];
+          bits.push(s.version ? `v${s.version}` : "OpenClaw");
+          bits.push(gatewayEndpoint(s));
+          setOpenclawSub(bits.join(" · "));
+        }
+        setGatewayRow("ok", "运行中");
+        setGatewayDiag(s, "运行中", "");
+        break;
+
+      case "error":
+      default:
+        // Genuine abnormal state: !alive with no intent=stopped cover
+        // and no warmup grace left. probe_error goes in the diag
+        // dialog (chevron) so the card surface stays single-word.
+        setOpenclawBadge("error", "异常");
+        setActionState("offline");
+        setOpenclawTone("down");
+        setOpenclawSub("点击一键修复,或使用启动按钮手动拉起");
+        setGatewayRow("err", "未响应");
+        setGatewayDiag(s, "未响应", s.probe_error || "");
+        break;
     }
     lastSessionsCount = s.sessions_count || 0;
     openclawChannelsRow.hidden = !(s.channel_count || s.sessions_count);
     openclawChannels.textContent = `${s.channel_count || 0} 个 · ${s.sessions_count || 0} 会话`;
     openclawAgentRow.hidden = !s.default_agent_id;
     openclawAgent.textContent = s.default_agent_id || "—";
-    const probeMS = s.last_probe_ms ? ` (${s.last_probe_ms} ms)` : "";
-    openclawProbed.textContent = s.last_probe_at
-      ? `${relStamp(s.last_probe_at)}${probeMS}`
-      : "—";
   }
 
   async function pollOpenClaw() {
@@ -540,8 +569,10 @@
   // through a ~6 s window where the UI still says 运行中 until the
   // gateway drops, then flaps to 异常, then back to 运行中 once the
   // post-action probe confirms. With this, the card goes straight to
-  // 重启中 (amber, breathing dot) and renderOpenClaw is frozen until
-  // runAction's finally block clears activeAction.
+  // 重启中 (blue, breathing dot via applyPendingState) and the card is
+  // frozen until runAction's finally block clears activeAction — then
+  // the phase-driven renderOpenClaw takes over, which will still read
+  // PhaseStarting from the backend for the remainder of the warmup.
   const ACTION_PENDING = {
     start:   { badge: "启动中",   sub: "正在启动 OpenClaw…",   row: "启动中…" },
     stop:    { badge: "停止中",   sub: "正在停止 OpenClaw…",   row: "停止中…" },
@@ -724,12 +755,64 @@
     if (gatewayDialogCrashes) {
       gatewayDialogCrashes.textContent = String(gatewayDiag.crashCount || 0);
     }
+    // Autoheal row: visible only when the operator opted in. The three
+    // copy branches are "待命" (enabled, never fired), "冷却中 · 剩 N"
+    // (enabled, within cooldown window), and "就绪 · 上次 …" (enabled,
+    // past the cooldown). formatAutoheal centralises the logic so the
+    // Copy-to-clipboard path picks up the same rendering.
+    if (gatewayDialogAutohealLabel && gatewayDialogAutoheal) {
+      const hide = !gatewayDiag.autohealEnabled;
+      gatewayDialogAutohealLabel.hidden = hide;
+      gatewayDialogAutoheal.hidden = hide;
+      if (!hide) {
+        gatewayDialogAutoheal.textContent = formatAutoheal(gatewayDiag);
+      }
+    }
     renderSparkline(gatewayDiag.history);
     const err = gatewayDiag.error || "";
     gatewayDialogErrorWrap.hidden = !err;
     gatewayDialogError.textContent = err;
     if (typeof gatewayDialog.showModal === "function") gatewayDialog.showModal();
     else gatewayDialog.setAttribute("open", "");
+  }
+
+  // formatAutoheal renders the dialog's 自愈 row based on the three
+  // observable states of the opt-in policy:
+  //
+  //   never fired  → "已启用 · 待命"
+  //   in cooldown  → "冷却中 · 剩 Xm · 已触发 N 次"
+  //   past cooldown→ "就绪 · 上次 Xm 前 · 已触发 N 次"
+  //
+  // All three branches are rendered on one line so the dt/dd grid
+  // stays visually aligned with the rows above (PID, uptime, crashes).
+  function formatAutoheal(d) {
+    const count = d.autohealCount || 0;
+    if (count === 0) return "已启用 · 待命";
+    const now = Date.now();
+    const nextMs = d.autohealNextEligibleAtISO
+      ? new Date(d.autohealNextEligibleAtISO).getTime()
+      : 0;
+    const lastFmt = d.autohealLastAtISO ? fmtRelative(new Date(d.autohealLastAtISO)) : "—";
+    if (Number.isFinite(nextMs) && nextMs > now) {
+      const remain = humanizeMS(nextMs - now);
+      return `冷却中 · 剩 ${remain} · 已触发 ${count} 次`;
+    }
+    return `就绪 · 上次 ${lastFmt} · 已触发 ${count} 次`;
+  }
+
+  // humanizeMS reduces a millisecond delta to a compact "1h 3m" style
+  // string. Chosen over Intl.RelativeTimeFormat because that one only
+  // emits a single unit and we need minutes resolution even when the
+  // cooldown happens to be 63 minutes.
+  function humanizeMS(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rs = s % 60;
+    if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm ? `${h}h ${rm}m` : `${h}h`;
   }
 
   // renderSparkline paints the last N probe samples into the dialog's
@@ -808,6 +891,12 @@
         `观察到运行: ${gatewayDialogUptime ? gatewayDialogUptime.textContent : "—"}`,
         `崩溃次数: ${gatewayDialogCrashes ? gatewayDialogCrashes.textContent : "0"}`,
       ];
+      // Only surface the 自愈 line when the operator opted in — the
+      // dt/dd pair is hidden otherwise and pasting "自愈: —" into a
+      // bug report would be pure noise.
+      if (gatewayDialogAutohealLabel && !gatewayDialogAutohealLabel.hidden) {
+        lines.push(`自愈: ${gatewayDialogAutoheal.textContent}`);
+      }
       const err = gatewayDialogError.textContent.trim();
       if (err) lines.push("", "错误信息:", err);
       const payload = lines.join("\n");

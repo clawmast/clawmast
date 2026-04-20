@@ -276,6 +276,7 @@ body {
 }
 .oc-card.tone-down .oc-icon { background: var(--error-dim); color: var(--error); }
 .oc-card.tone-warn .oc-icon { background: var(--warning-dim); color: var(--warning); }
+.oc-card.tone-info .oc-icon { background: var(--info-dim);    color: var(--info); }
 
 .oc-head-body { flex: 1; min-width: 0; }
 .oc-title {
@@ -374,6 +375,7 @@ body {
 .health-icon[data-state="ok"]   { color: var(--ok, #2ea043); }
 .health-icon[data-state="err"]  { color: var(--err, #f85149); }
 .health-icon[data-state="warn"] { color: var(--warn, #d29922); }
+.health-icon[data-state="info"] { color: var(--info); }
 .health-icon[data-state="off"]  { color: var(--text-dim); }
 .health-icon[data-state="unknown"] { color: transparent; }
 .health-icon[data-state="unknown"]::before {
@@ -382,6 +384,7 @@ body {
 
 .health-row[data-state="err"]  .meta-value { color: var(--err, #f85149); }
 .health-row[data-state="warn"] .meta-value { color: var(--warn, #d29922); }
+.health-row[data-state="info"] .meta-value { color: var(--info); }
 .health-row[data-state="off"]  .meta-value { color: var(--text-muted); }
 
 /* ── Inline expandable detail (native <details>) ──────────────
@@ -530,17 +533,24 @@ body {
 .badge-error   { background: var(--error-dim);   color: var(--error); }
 .badge-warn    { background: var(--warning-dim); color: var(--warning); }
 .badge-unknown { background: var(--surface-2); color: var(--text-dim); }
-/* badge-pending: the optimistic state applied the instant an action
-   button is clicked, before the backend probe can confirm. Visually a
-   muted amber with a breathing dot so the operator can tell the UI is
-   in the middle of a handoff rather than genuinely unknown. */
-.badge-pending { background: var(--warning-dim); color: var(--warning); }
-.badge-pending .dot { animation: pulse-dot 1.1s ease-in-out infinite; }
+/* badge-starting: the "coming up" state — either an action is
+   streaming (optimistic paint before the first post-action probe
+   lands) or the backend computed PhaseStarting because it is inside
+   the warmup-grace window. Muted blue with a breathing dot signals
+   "busy, working on it" without the warning/error connotation that
+   amber and red carry. The old badge-pending class is kept as an
+   alias so any stray caller in the layout templates still resolves
+   to the same visuals during transition. */
+.badge-starting,
+.badge-pending { background: var(--info-dim); color: var(--info); }
+.badge-starting .dot,
+.badge-pending  .dot { animation: pulse-dot 1.1s ease-in-out infinite; }
 
-/* Gateway row pending state: dim amber dot to match the badge while the
-   action streams. Ends when activeAction clears and the next probe
-   snapshot lands. */
-.health-icon[data-state="pending"] { color: var(--warn, #d29922); }
+/* Gateway row starting state: dim blue dot to match the badge while
+   an action runs or the warmup grace holds. */
+.health-icon[data-state="starting"],
+.health-icon[data-state="pending"] { color: var(--info); }
+.health-icon[data-state="starting"]::before,
 .health-icon[data-state="pending"]::before { animation: pulse-dot 1.1s ease-in-out infinite; }
 
 @keyframes pulse-dot {
@@ -611,13 +621,18 @@ body {
 
 .btn .btn-spinner {
   display: none;
-  width: 12px; height: 12px;
+  width: 16px; height: 16px;
   border-radius: 50%;
   border: 2px solid currentColor;
   border-right-color: transparent;
   animation: spin 720ms linear infinite;
 }
 .btn[data-loading="1"] .btn-spinner { display: inline-block; }
+/* The action icon (▶ / ⟳ / ■) is replaced by the spinner while the
+   command is in flight — not joined by it. Otherwise the button grows
+   by the spinner's width, shoving the 启动 / 停止 label sideways, which
+   reads as "the text itself is wobbling" to the operator. */
+.btn[data-loading="1"] > svg { display: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .btn-group { display: inline-flex; flex-wrap: wrap; gap: 8px; }

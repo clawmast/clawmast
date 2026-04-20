@@ -3,6 +3,7 @@ package openclaw
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,39 @@ const IdlePollInterval = 2 * time.Second
 // explicitly. New code should rely on the adaptive behaviour.
 const DefaultPollInterval = ActivePollInterval
 
+// AutohealConfig controls the opt-in self-heal policy. When Enabled
+// is true and every gating condition in Manager.shouldAutoheal
+// agrees, the poller fires Trigger in a background goroutine once
+// the gateway has been observed !alive for Threshold consecutive
+// probes, then sits out Cooldown before it may fire again.
+//
+// Trigger is invoked with a fresh context carrying a 90 s deadline
+// (matching the Fix HTTP handler budget). A nil Trigger turns
+// autoheal into a decision-only no-op, which tests use to avoid
+// spawning real CLI commands. Production wires Trigger to
+// Cascade(ctx, m, discardCh).
+type AutohealConfig struct {
+	Enabled   bool
+	Threshold int
+	Cooldown  time.Duration
+	Trigger   func(ctx context.Context)
+}
+
+// DefaultAutohealThreshold is the default consecutive-!alive count
+// before autoheal fires. With IdlePollInterval at 2 s this gives a
+// ~6 s confirmation window — long enough to filter a one-tick flap,
+// short enough that a real crash recovers before the operator
+// switches to another tab.
+const DefaultAutohealThreshold = 3
+
+// DefaultAutohealCooldown is the minimum gap between two autoheal
+// triggers. Picked to match the rough budget of a Cascade run
+// (doctor ≤ 30 s + gateway restart ≤ 15 s + OS restart ≤ 10 s) with
+// slack for Node warm-up. A too-short cooldown turns a broken
+// gateway into a cascade-spam loop that starves the operator's own
+// clicks.
+const DefaultAutohealCooldown = 5 * time.Minute
+
 // Manager owns the background poller and the Snapshot store. One
 // Manager per process. It is safe to Start once and call Get any
 // number of times concurrently.
@@ -35,6 +69,32 @@ type Manager struct {
 	// file. Empty means "no override lookup" — the rest of the
 	// discovery chain still works fine without it.
 	stateDir string
+	// autoheal holds the resolved opt-in self-heal policy. Zero value
+	// (Enabled=false) is the default — identical to the pre-autoheal
+	// behaviour.
+	autoheal AutohealConfig
+	// currentAction holds the name ("start"/"stop"/"restart"/"doctor"/
+	// "fix") of the user-initiated command currently executing, or ""
+	// when idle. Two consumers read it:
+	//
+	//   - Autoheal gate: non-empty means "operator is driving, stand
+	//     down" — identical semantics to the previous actionInFlight
+	//     bool, preserved across this refactor.
+	//   - ComputePhase: membership in startingActions (start/restart/
+	//     fix only) drives PhaseStarting. Stop and doctor must not
+	//     promote the badge to "coming up" — stop is already
+	//     represented by Intent=stopped, and doctor is read-only.
+	//
+	// atomic.Pointer over atomic.Value because the latter panics on
+	// type mismatch; Pointer[string] is typed end-to-end.
+	currentAction atomic.Pointer[string]
+	// lastStartAttemptAt is the UnixNano stamp of the most recent
+	// successful start/restart/fix CLI completion. ComputePhase uses
+	// it to hold PhaseStarting for WarmupGracePeriod after the command
+	// returns, covering the gap between CLI ok and the first alive
+	// probe landing (typically 1–3 s on macOS launchd cold start, up
+	// to 15 s on a cold Node process). Zero = never attempted.
+	lastStartAttemptAt atomic.Int64
 }
 
 // NewManager constructs a Manager. A nil logger defaults to
@@ -62,6 +122,23 @@ func NewManager(runner Runner, interval time.Duration, logger *slog.Logger) *Man
 // probes, which is the legacy behaviour).
 func (m *Manager) WithStateDir(stateDir string) *Manager {
 	m.stateDir = stateDir
+	return m
+}
+
+// WithAutoheal installs the opt-in self-heal policy. Returns m so
+// callers can chain at construction time. Zero-value or Enabled=false
+// is explicitly allowed and turns autoheal into a no-op; a missing
+// Threshold falls back to DefaultAutohealThreshold and a missing
+// Cooldown to DefaultAutohealCooldown so callers only need to set the
+// fields they actually want to override.
+func (m *Manager) WithAutoheal(cfg AutohealConfig) *Manager {
+	if cfg.Threshold <= 0 {
+		cfg.Threshold = DefaultAutohealThreshold
+	}
+	if cfg.Cooldown <= 0 {
+		cfg.Cooldown = DefaultAutohealCooldown
+	}
+	m.autoheal = cfg
 	return m
 }
 
@@ -124,12 +201,21 @@ func (m *Manager) ProbeNow(ctx context.Context) Snapshot {
 		ProbeMS: next.LastProbeMS,
 	}
 	now := time.Now().UTC()
+	// fireAutoheal signals the post-lock goroutine dispatch; populated
+	// from inside the store.set closure while we hold the lock and the
+	// decision is race-free.
+	var (
+		fireAutoheal      bool
+		fireAutohealCount int
+		fireCooldownUntil string
+	)
 	m.store.set(func(s *Snapshot) {
 		// Preserve cumulative state that probe() cannot see: Intent
 		// (written out-of-band by SetIntent), CrashCount, ProbeHistory,
-		// and GatewayPIDSince. Reading from s (the lock-held current
-		// snapshot) rather than prev closes the gap where a concurrent
-		// writer lands between Get() above and set() here.
+		// GatewayPIDSince, and the autoheal bookkeeping fields. Reading
+		// from s (the lock-held current snapshot) rather than prev
+		// closes the gap where a concurrent writer lands between Get()
+		// above and set() here.
 		intent := s.Intent
 		crashes := s.CrashCount
 		history := s.ProbeHistory
@@ -137,6 +223,11 @@ func (m *Manager) ProbeNow(ctx context.Context) Snapshot {
 		prevPID := s.GatewayPID
 		prevAlive := s.Alive
 		hadProbed := s.Probed
+		ahCount := s.AutohealCount
+		ahLastAt := s.AutohealLastAt
+		ahNextAt := s.AutohealNextEligibleAt
+		ahNext := s.AutohealNextEligible
+		ahConsec := s.AutohealConsecutiveDown
 		*s = next
 		s.Intent = intent
 
@@ -164,7 +255,71 @@ func (m *Manager) ProbeNow(ctx context.Context) Snapshot {
 		}
 
 		s.ProbeHistory = appendProbeSample(history, sample)
+
+		// Restore autoheal bookkeeping that *s = next wiped. The
+		// consecutive-down counter advances or resets based on the
+		// just-observed Alive bit so the gating check below sees the
+		// current streak length.
+		s.AutohealCount = ahCount
+		s.AutohealLastAt = ahLastAt
+		s.AutohealNextEligibleAt = ahNextAt
+		s.AutohealNextEligible = ahNext
+		s.AutohealConsecutiveDown = ahConsec
+		s.AutohealEnabled = m.autoheal.Enabled
+		// While a user action is in flight, force the consecutive-down
+		// counter to zero. The gateway is legitimately !alive during
+		// the first few seconds of `openclaw gateway start`; counting
+		// those ticks would accumulate toward the threshold and fire
+		// autoheal the moment the action returned, spawning a second
+		// cascade that races with the user's request.
+		curAction := m.CurrentAction()
+		actionLive := curAction != ""
+		switch {
+		case actionLive:
+			s.AutohealConsecutiveDown = 0
+		case next.Alive:
+			s.AutohealConsecutiveDown = 0
+		default:
+			s.AutohealConsecutiveDown++
+		}
+
+		// Phase is computed inside the lock so it observes the exact
+		// Snapshot being stored, not a race-risk "get + recompute"
+		// pair. The UI reads s.Phase directly and must not re-derive
+		// the same decision (phase.go's comment explains why).
+		s.Phase = ComputePhase(*s, curAction, m.LastStartAttempt(), now)
+
+		// Autoheal decision runs inside the lock so two concurrent
+		// ProbeNow calls cannot both observe "at threshold" and fire
+		// twice: the second caller will see the reset counter the
+		// first caller wrote. The action-in-flight gate above also
+		// keeps shouldAutoheal returning false here even in the edge
+		// case where a stale counter reached threshold moments before
+		// the user pressed a button.
+		if !actionLive && shouldAutoheal(s, m.autoheal, now) {
+			s.AutohealCount++
+			s.AutohealLastAt = rfc3339(now)
+			s.AutohealNextEligible = now.Add(m.autoheal.Cooldown)
+			s.AutohealNextEligibleAt = rfc3339(s.AutohealNextEligible)
+			s.AutohealConsecutiveDown = 0
+			fireAutoheal = true
+			fireAutohealCount = s.AutohealCount
+			fireCooldownUntil = s.AutohealNextEligibleAt
+		}
 	})
+	if fireAutoheal {
+		m.logger.Info("openclaw: autoheal triggered",
+			"component", "openclaw",
+			"count", fireAutohealCount,
+			"cooldown_until", fireCooldownUntil)
+		if m.autoheal.Trigger != nil {
+			go func() {
+				tctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+				defer cancel()
+				m.autoheal.Trigger(tctx)
+			}()
+		}
+	}
 	return m.store.Get()
 }
 
@@ -188,6 +343,56 @@ func appendProbeSample(history []ProbeSample, sample ProbeSample) []ProbeSample 
 // call this — it is read-only.
 func (m *Manager) SetIntent(intent Intent) {
 	m.store.set(func(s *Snapshot) { s.Intent = intent })
+}
+
+// setCurrentAction records the name of the action now running so
+// autoheal can stand down and ComputePhase can elect PhaseStarting.
+// RunAction and the Fix handler call this at the top and pair it
+// with a deferred clearCurrentAction so a panic cannot leave the
+// flag stuck. Empty name clears the slot (same as
+// clearCurrentAction, kept as a convenience for tests).
+func (m *Manager) setCurrentAction(name string) {
+	if name == "" {
+		m.currentAction.Store(nil)
+		return
+	}
+	m.currentAction.Store(&name)
+}
+
+// clearCurrentAction resets the in-flight slot to empty.
+func (m *Manager) clearCurrentAction() { m.currentAction.Store(nil) }
+
+// CurrentAction returns the name of the currently executing action,
+// or "" when idle. Exported so tests and (future) diagnostic handlers
+// can observe the gate without reaching into the atomic.
+func (m *Manager) CurrentAction() string {
+	if p := m.currentAction.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// stampStartAttempt records now as the most recent start/restart/fix
+// attempt completion. Used by ComputePhase to hold PhaseStarting
+// through the WarmupGracePeriod window. Called unconditionally for
+// start/restart (even on non-zero CLI exit: see action.go's comment
+// on why CLI self-check exit codes are unreliable) and conditionally
+// for cascade tiers that actually repaired the gateway. Stop and
+// doctor do not call this — their post-action state is conveyed by
+// Intent and (for doctor) by the unchanged gateway state.
+func (m *Manager) stampStartAttempt(now time.Time) {
+	m.lastStartAttemptAt.Store(now.UnixNano())
+}
+
+// LastStartAttempt returns the time of the most recent stamped
+// attempt, or the zero time when none has been recorded. Exported
+// so ComputePhase callers in tests can inject expected values.
+func (m *Manager) LastStartAttempt() time.Time {
+	ns := m.lastStartAttemptAt.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns).UTC()
 }
 
 // Start runs the poll loop until ctx is cancelled. It probes once

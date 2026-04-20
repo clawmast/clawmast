@@ -82,6 +82,14 @@ func actionStepID(a Action) StepID {
 // timeout inside the remaining request context.
 func RunAction(ctx context.Context, m *Manager, evCh chan<- StepEvent, a Action) {
 	defer close(evCh)
+	// Record the in-flight action by name so the probe loop holds
+	// autoheal off (any non-empty value qualifies) and ComputePhase
+	// can elect PhaseStarting for start/restart specifically. Cleared
+	// via defer so a panic in runCmd still restores it — a stuck
+	// non-empty value would permanently disable autoheal and keep
+	// the badge blue forever.
+	m.setCurrentAction(string(a))
+	defer m.clearCurrentAction()
 	if !ValidAction(string(a)) {
 		evCh <- StepEvent{
 			Step:    StepID("action-" + string(a)),
@@ -119,6 +127,21 @@ func RunAction(ctx context.Context, m *Manager, evCh chan<- StepEvent, a Action)
 		end.StderrTail = trimErr(res.Stderr)
 	}
 	evCh <- end
+
+	// Stamp the warmup-grace anchor for any start/restart attempt,
+	// regardless of the CLI's own exit code. `openclaw gateway
+	// restart` runs a post-restart health self-check that races the
+	// gateway's HTTP warmup — the CLI routinely exits non-zero even
+	// when the gateway will be alive a few seconds later. Gating the
+	// stamp on OutcomeOK dropped us into PhaseError for the 5–15 s
+	// warmup window in exactly those cases, defeating the grace
+	// period that ComputePhase was built for. The anchor only opens
+	// a 15 s leniency window; a genuine failure still surfaces when
+	// no alive probe lands before it expires. Stop/doctor remain
+	// excluded: stop inverts intent, doctor is read-only.
+	if a == ActionStart || a == ActionRestart {
+		m.stampStartAttempt(time.Now().UTC())
+	}
 
 	// Refresh the snapshot so the subsequent /api/openclaw/status poll
 	// in the UI reflects the post-action state without waiting for the

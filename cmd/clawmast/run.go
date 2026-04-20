@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -97,6 +99,7 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 				"fingerprint", tok.Fingerprint())
 		}
 		ocMgr := openclaw.NewManager(openclaw.Runner{}, 0, logger).WithStateDir(stateDir)
+		applyAutoheal(ocMgr, logger)
 		go ocMgr.Start(ctx)
 		channel, channelSource := agent.ResolveChannel(
 			stateDir,
@@ -215,6 +218,75 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envTruthy returns true for common "on" spellings of an env var.
+// Anything else — including "0", "false", "", "no" — is treated as
+// off. The lowercase+trim keeps the policy forgiving of operator
+// typos without needing a real config parser.
+func envTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// applyAutoheal reads CLAWMAST_OPENCLAW_AUTOHEAL[ _THRESHOLD | _COOLDOWN ]
+// from the environment and, when the feature is enabled, installs the
+// policy on ocMgr with a Trigger that runs the full openclaw.Cascade.
+// The feature is strictly opt-in — absent or falsey env value leaves
+// Manager behaviour identical to the pre-autoheal baseline.
+//
+// Invalid overrides (non-numeric threshold, unparseable duration) are
+// warned-about and fall through to the defaults so a typo cannot turn
+// autoheal into a silent no-op.
+func applyAutoheal(ocMgr *openclaw.Manager, logger *slog.Logger) {
+	if !envTruthy(os.Getenv("CLAWMAST_OPENCLAW_AUTOHEAL")) {
+		return
+	}
+	cfg := openclaw.AutohealConfig{Enabled: true}
+	if v := os.Getenv("CLAWMAST_OPENCLAW_AUTOHEAL_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Threshold = n
+		} else {
+			logger.Warn("openclaw: ignoring invalid CLAWMAST_OPENCLAW_AUTOHEAL_THRESHOLD",
+				"component", "openclaw", "value", v)
+		}
+	}
+	if v := os.Getenv("CLAWMAST_OPENCLAW_AUTOHEAL_COOLDOWN"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.Cooldown = d
+		} else {
+			logger.Warn("openclaw: ignoring invalid CLAWMAST_OPENCLAW_AUTOHEAL_COOLDOWN",
+				"component", "openclaw", "value", v)
+		}
+	}
+	// Trigger drains Cascade's event channel so the goroutine does not
+	// block on a full buffer. The cascade itself logs and updates the
+	// snapshot via internal probes — we only care about the side effect.
+	cfg.Trigger = func(ctx context.Context) {
+		evCh := make(chan openclaw.StepEvent, 8)
+		go openclaw.Cascade(ctx, ocMgr, evCh)
+		for range evCh {
+		}
+	}
+	// Resolve defaults here too so the boot log matches the Manager's
+	// effective policy without a getter. WithAutoheal applies the same
+	// defaults internally.
+	threshold := cfg.Threshold
+	if threshold <= 0 {
+		threshold = openclaw.DefaultAutohealThreshold
+	}
+	cooldown := cfg.Cooldown
+	if cooldown <= 0 {
+		cooldown = openclaw.DefaultAutohealCooldown
+	}
+	ocMgr.WithAutoheal(cfg)
+	logger.Info("openclaw: autoheal enabled",
+		"component", "openclaw",
+		"threshold", threshold,
+		"cooldown", cooldown.String())
 }
 
 // resolveInstallRoot best-effort-locates the clawmastd install tree so

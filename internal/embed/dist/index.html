@@ -132,10 +132,7 @@
                 <span class="meta-label">默认 Agent</span>
                 <span class="meta-value" id="openclaw-agent">—</span>
               </li>
-              <li class="meta-row">
-                <span class="meta-label">上次探测</span>
-                <span class="meta-value" id="openclaw-probed">—</span>
-              </li>
+
             </ul>
 
             <!-- Controls. The button set is state-driven (see
@@ -457,6 +454,13 @@
           <dt>Gateway PID</dt>   <dd class="mono small" id="gateway-dialog-pid">—</dd>
           <dt>观察到运行</dt>    <dd id="gateway-dialog-uptime">—</dd>
           <dt>崩溃次数</dt>      <dd id="gateway-dialog-crashes">0</dd>
+          <!-- Autoheal row. Hidden when CLAWMAST_OPENCLAW_AUTOHEAL
+               is unset (the default); shown as "待命 / 冷却中 / 就绪"
+               when the operator opted in. The hidden attribute is
+               toggled by JS in openGatewayDialog based on
+               autoheal_enabled on the /status payload. -->
+          <dt id="gateway-dialog-autoheal-label" hidden>自愈</dt>
+          <dd id="gateway-dialog-autoheal" hidden>—</dd>
         </dl>
         <!-- Probe sparkline. Renders the last ProbeHistoryLen samples
              (20) as a flat SVG line; red dots mark alive=false ticks.
