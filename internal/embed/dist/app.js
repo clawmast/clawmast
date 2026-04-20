@@ -431,36 +431,37 @@
   // exactly one case, not patching N call sites.
   function renderOpenClaw(s) {
     // Mirror Snapshot.current_action into activeAction so the button
-    // row and pending paint survive a page refresh mid-restart. We
-    // only adopt when there is no local stream active (activeAction
-    // null) — a local click owns its own lifecycle and would fight
-    // with a second adoption. When the server clears and we were
-    // only following the server, drop the gate and fall through to
-    // the normal phase branch so the card repaints on truth.
+    // row and pending paint survive a page refresh mid-restart. A
+    // local click owns its own lifecycle; we only adopt when there
+    // is no local stream active. Adoption only sets the flags —
+    // painting is deferred to the tail of this function so the
+    // phase switch can run first and unhide buttons / rows that
+    // the HTML hides by default (on a cold refresh the DOM starts
+    // with stop/restart buttons hidden and channel/agent rows
+    // hidden until setActionState and the post-switch row code
+    // unhide them).
     const serverAction = s.current_action || "";
     if (serverAction && !activeAction && ACTION_PENDING[serverAction]) {
       activeAction = serverAction;
       activeActionFromServer = true;
-      for (const b of actionButtons) b.disabled = true;
-      const mirrorBtn = document.querySelector(`[data-action="${serverAction}"]`);
-      if (mirrorBtn) mirrorBtn.dataset.loading = "1";
-      applyPendingState(serverAction);
-      return;
     }
     if (!serverAction && activeActionFromServer) {
       // Server-owned action finished and we have no local stream —
-      // release the freeze so the phase branch below can paint.
-      // Loading spinners on mirrored buttons are cleared here; a
-      // local runAction clears them in its own finally block.
+      // release the freeze and clear any mirrored loading spinner.
+      // A local runAction clears its own button in its finally.
       for (const b of actionButtons) b.dataset.loading = "0";
       activeAction = null;
       activeActionFromServer = false;
     }
 
-    // Freeze the card while a local action is streaming. The 1 s
-    // poller would otherwise race with the optimistic paint from
-    // applyPendingState during the first probe after the click.
-    if (activeAction) return;
+    // Freeze the card against stream events for a LOCAL click: while
+    // runAction is consuming NDJSON, the 1 s poller would race with
+    // applyStreamEvent. Server-adopted actions have no local stream
+    // to protect, so they fall through to the phase switch + overlay
+    // below, which is what lets the cold-refresh DOM get fully
+    // populated (buttons unhidden, rows unhidden) before the pending
+    // labels are overlaid.
+    if (activeAction && !activeActionFromServer) return;
 
     const phase = s.phase || "";
 
@@ -556,6 +557,21 @@
     openclawChannels.textContent = `${s.channel_count || 0} 个 · ${s.sessions_count || 0} 会话`;
     openclawAgentRow.hidden = !s.default_agent_id;
     openclawAgent.textContent = s.default_agent_id || "—";
+
+    // Pending overlay — applied AFTER the phase switch so the button
+    // row and info rows the switch unhides are preserved. Runs for
+    // both local clicks (activeActionFromServer=false) and for
+    // refresh-adopted server actions (activeActionFromServer=true):
+    // in both cases we want every button disabled, the one in flight
+    // marked data-loading, and the badge/sub/gateway-row text swapped
+    // to the action-specific copy (重启中 vs the generic 启动中 that
+    // phase=starting would show).
+    if (activeAction) {
+      applyPendingState(activeAction);
+      for (const b of actionButtons) b.disabled = true;
+      const inflightBtn = document.querySelector(`[data-action="${activeAction}"]`);
+      if (inflightBtn) inflightBtn.dataset.loading = "1";
+    }
   }
 
   async function pollOpenClaw() {
