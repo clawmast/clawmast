@@ -70,7 +70,7 @@ func TestListenerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if _, err := client.Write([]byte("READY=1\nSTATUS=ok\n")); err != nil {
 		t.Fatalf("write: %v", err)

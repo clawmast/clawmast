@@ -110,10 +110,7 @@ func (s *Server) handleChannelSet(w http.ResponseWriter, r *http.Request) {
 		active = ChannelStable
 	}
 	restartRequired := pref != active
-	restartRequested := false
-	if req.Restart && restartRequired && s.cfg.RequestRestart != nil {
-		restartRequested = true
-	}
+	restartRequested := req.Restart && restartRequired && s.cfg.RequestRestart != nil
 
 	writeJSON(w, http.StatusOK, ChannelSetResponse{
 		Active:           active,

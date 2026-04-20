@@ -1,5 +1,6 @@
 // Package embed bundles the static worker UI into the binary via
-// go:embed.
+// the standard library's embed mechanism (see the //go:embed
+// directive on Assets below).
 //
 // Iteration 0 ships a hand-written single-page HTML + CSS + JS
 // dashboard (architecture/refactor.md §9: "UI shows version, check

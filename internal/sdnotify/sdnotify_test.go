@@ -40,7 +40,7 @@ func dialListener(t *testing.T) (string, <-chan string) {
 	if err != nil {
 		t.Fatalf("listen unixgram: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	out := make(chan string, 16)
 	go func() {
 		defer close(out)

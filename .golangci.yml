@@ -1,0 +1,56 @@
+# golangci-lint config for clawmast.
+#
+# The defaults are too strict for Go's idiomatic cleanup patterns --
+# `defer f.Close()`, `defer resp.Body.Close()`, `fmt.Fprintln(os.Stderr, ...)`,
+# and `os.Unsetenv` in tests all trip errcheck with noise and no signal.
+# The exclusions below restore the Go-blessed style without weakening
+# error checking where it actually matters (returned errors from
+# I/O, exec, JSON, etc. stay fully checked).
+#
+# Version must match the `golangci/golangci-lint-action@v9` invocation
+# in .github/workflows/ci.yml (pinned to v2.11.4 there).
+
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Exclude idiomatic cleanup patterns. `Close` (method-name only,
+      # no receiver) matches every `.Close()` call in the tree --
+      # covers *os.File, *net.UnixConn, *gzip.Reader/Writer,
+      # *tar.Writer, *http.Response.Body, *sdnotify.Client, and any
+      # future io.Closer-shaped type without forcing this list to
+      # track them one by one. Genuine error-surfacing writes still
+      # have to route through an explicit Sync+Close path; bare
+      # defer-Close is only acceptable on read paths and on writers
+      # whose final Close error is best-effort (tar/gzip trailers,
+      # test teardown, etc.).
+      #
+      # fmt.Fprint{,f,ln} is excluded because the stdlib io.Writer it
+      # writes to (os.Stderr, *bytes.Buffer, http.ResponseWriter) can
+      # realistically only fail when the consumer is already broken,
+      # in which case there's nothing useful to do with the error.
+      #
+      # os.Unsetenv and os.RemoveAll are excluded for test teardown
+      # where the cleanup is best-effort.
+      exclude-functions:
+        # The stdlib concrete types whose Close is idiomatic-defer.
+        - (*os.File).Close
+        - (*net.UnixConn).Close
+        - (*compress/gzip.Reader).Close
+        - (*compress/gzip.Writer).Close
+        - (*archive/tar.Writer).Close
+        # http.Response.Body and similar are typed io.ReadCloser at
+        # the call site; match the interface so every Body.Close()
+        # falls through regardless of concrete response type.
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (io.WriteCloser).Close
+        # Our own sdnotify.Client is a thin wrapper over a UDS conn;
+        # Close never returns anything the caller can usefully act on.
+        - (*github.com/clawmast/clawmast/internal/sdnotify.Client).Close
+        - os.Unsetenv
+        - os.RemoveAll
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
