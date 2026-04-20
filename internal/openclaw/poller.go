@@ -161,7 +161,17 @@ func (m *Manager) resolveRunner() (Runner, Discovery) {
 
 // Get returns the latest Snapshot. Safe for concurrent use; the
 // returned value is a copy.
-func (m *Manager) Get() Snapshot { return m.store.Get() }
+//
+// CurrentAction is overlaid from the atomic pointer on every call so
+// /status reflects setCurrentAction writes that land between probe
+// ticks — otherwise a click would render as 运行中 for up to one tick
+// before the Snapshot on disk caught up, defeating the whole point
+// of mirroring the in-flight action to the UI.
+func (m *Manager) Get() Snapshot {
+	s := m.store.Get()
+	s.CurrentAction = m.CurrentAction()
+	return s
+}
 
 // Runner exposes the resolved Runner so callers (notably the Fix
 // handler) can spawn cascade commands against the same binary the
@@ -274,6 +284,13 @@ func (m *Manager) ProbeNow(ctx context.Context) Snapshot {
 		// cascade that races with the user's request.
 		curAction := m.CurrentAction()
 		actionLive := curAction != ""
+		// Persist the in-flight action name on the stored Snapshot so
+		// callers that do not go through Manager.Get (internal
+		// diagnostics, tests reading from the store directly) see the
+		// same value the HTTP layer surfaces. Manager.Get additionally
+		// overlays the atomic read at response time so values that land
+		// between ticks are not lost.
+		s.CurrentAction = curAction
 		switch {
 		case actionLive:
 			s.AutohealConsecutiveDown = 0

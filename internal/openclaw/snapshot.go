@@ -82,6 +82,24 @@ type Snapshot struct {
 	// process (launchd, another operator) intervenes.
 	Intent Intent `json:"intent,omitempty"`
 
+	// CurrentAction mirrors Manager.currentAction on the wire so the UI
+	// can derive button-loading state from the Snapshot alone. A page
+	// refresh mid-restart used to drop the per-button spinner because
+	// the JS activeAction variable was pure local state; exposing the
+	// in-flight action here lets renderOpenClaw re-adopt the pending
+	// paint for any operator (same tab after refresh, cross-tab, cold
+	// load) as long as the backend RunAction is still executing.
+	//
+	// Populated on every probe tick and overlaid by Manager.Get so the
+	// field reflects setCurrentAction writes that land between ticks,
+	// which matters: a click's first /status after the action starts
+	// must already see the name or the UI shows 运行中 for up to one
+	// probe interval before adopting.
+	//
+	// Empty means no action is in flight. The value is one of
+	// "start" / "stop" / "restart" / "doctor" / "fix".
+	CurrentAction string `json:"current_action,omitempty"`
+
 	// LastEnrichedAt is the RFC 3339 timestamp of the most recent CLI
 	// enrichment (`openclaw health --json`) that succeeded. Used by
 	// probe() to throttle the slow CLI spawn: liveness is driven by the

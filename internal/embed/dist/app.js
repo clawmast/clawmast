@@ -430,8 +430,35 @@
   // kept exhaustive and parallel so adding a new phase means adding
   // exactly one case, not patching N call sites.
   function renderOpenClaw(s) {
-    // Freeze the card while an action is streaming. The 1 s poller
-    // would otherwise race with the optimistic paint from
+    // Mirror Snapshot.current_action into activeAction so the button
+    // row and pending paint survive a page refresh mid-restart. We
+    // only adopt when there is no local stream active (activeAction
+    // null) — a local click owns its own lifecycle and would fight
+    // with a second adoption. When the server clears and we were
+    // only following the server, drop the gate and fall through to
+    // the normal phase branch so the card repaints on truth.
+    const serverAction = s.current_action || "";
+    if (serverAction && !activeAction && ACTION_PENDING[serverAction]) {
+      activeAction = serverAction;
+      activeActionFromServer = true;
+      for (const b of actionButtons) b.disabled = true;
+      const mirrorBtn = document.querySelector(`[data-action="${serverAction}"]`);
+      if (mirrorBtn) mirrorBtn.dataset.loading = "1";
+      applyPendingState(serverAction);
+      return;
+    }
+    if (!serverAction && activeActionFromServer) {
+      // Server-owned action finished and we have no local stream —
+      // release the freeze so the phase branch below can paint.
+      // Loading spinners on mirrored buttons are cleared here; a
+      // local runAction clears them in its own finally block.
+      for (const b of actionButtons) b.dataset.loading = "0";
+      activeAction = null;
+      activeActionFromServer = false;
+    }
+
+    // Freeze the card while a local action is streaming. The 1 s
+    // poller would otherwise race with the optimistic paint from
     // applyPendingState during the first probe after the click.
     if (activeAction) return;
 
@@ -580,12 +607,22 @@
     fix:     { badge: "修复中",   sub: "正在执行一键修复…",   row: "修复中…" },
   };
 
-  // activeAction holds the name of the action currently streaming. When
-  // non-null, renderOpenClaw() early-returns — the pending UI stays
-  // put even as the 1 s status poll keeps running in the background.
-  // runAction() clears it in `finally` and then calls pollOpenClaw()
-  // to paint the post-action reality.
+  // activeAction holds the name of the action currently streaming
+  // (local click) or mirrored from Snapshot.current_action (server-
+  // driven — another tab, pre-refresh click still running on the
+  // backend). When non-null, renderOpenClaw() early-returns after
+  // painting the pending frame, keeping the badge and button row
+  // frozen on 启动中 / 重启中 until the source clears.
+  //
+  // activeActionFromServer disambiguates the two authorities:
+  //   false → local click; runAction() owns the lifecycle and clears
+  //           both flags in its finally block.
+  //   true  → adopted from snapshot; renderOpenClaw() clears both the
+  //           next time snapshot.current_action goes empty, which is
+  //           how a mid-restart page refresh eventually returns to
+  //           the normal phase-driven render without a stream to end.
   let activeAction = null;
+  let activeActionFromServer = false;
 
   // Actions that interrupt active sessions prompt first. The copy
   // adapts to the current sessions_count so "1 个会话" vs "当前没有
@@ -955,8 +992,11 @@
     // Optimistic pending paint. Set activeAction before applying so
     // renderOpenClaw (which may be mid-fetch from a concurrent poll
     // tick) is frozen by the time the pending frame lands — no flicker
-    // between "运行中" and "重启中".
+    // between "运行中" and "重启中". activeActionFromServer is forced
+    // false so the finally-block clear below wins over any server
+    // adoption that may have raced in.
     activeAction = name;
+    activeActionFromServer = false;
     applyPendingState(name);
 
     const url = name === "fix"

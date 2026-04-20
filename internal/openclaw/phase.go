@@ -71,8 +71,16 @@ var startingActions = map[string]bool{
 //  3. Operator intent wins over observed alive: a stop that has just
 //     issued SetIntent(stopped) should render 已停止 immediately even
 //     if the port is still accepting connections for another tick.
-//  4. alive=true is the happy path.
-//  5. Falling through to error requires explicit disqualification
+//  4. An in-flight start/restart/fix wins over observed alive. The
+//     restart path clicks while the gateway is still alive=true, and
+//     the CLI's stop phase will kill it within the next 2-3 probes;
+//     reporting PhaseRunning in that window paints the badge green
+//     for a few seconds before it flips to starting, which reads as a
+//     stale state the user explicitly complained about. Treating the
+//     in-flight action as authoritative keeps the badge blue from
+//     click to warmup-complete.
+//  5. alive=true is the happy path when nothing else applies.
+//  6. Falling through to error requires explicit disqualification
 //     from both the in-flight gate and the warmup grace window.
 //
 // The function is deterministic given its inputs, which lets the test
@@ -93,11 +101,11 @@ func computePhaseWithGrace(s Snapshot, currentAction string, lastStartAt, now ti
 	if s.Intent == IntentStopped {
 		return PhaseStopped
 	}
-	if s.Alive {
-		return PhaseRunning
-	}
 	if startingActions[currentAction] {
 		return PhaseStarting
+	}
+	if s.Alive {
+		return PhaseRunning
 	}
 	if !lastStartAt.IsZero() && now.Sub(lastStartAt) < grace {
 		return PhaseStarting

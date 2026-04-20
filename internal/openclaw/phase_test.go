@@ -60,6 +60,18 @@ func TestComputePhase(t *testing.T) {
 			want:          PhaseStarting,
 		},
 		{
+			// Regression guard: during the first 2-3 probes after a
+			// restart click the gateway is still reachable (old
+			// process has not been SIGTERM'd yet). Reporting Running
+			// there paints the badge green for a few seconds before
+			// flipping to Starting, which reads as a stale state.
+			// The in-flight action must beat Alive.
+			name:          "restart action in flight beats alive=true",
+			snap:          Snapshot{Probed: true, Alive: true, Intent: IntentRunning},
+			currentAction: "restart",
+			want:          PhaseStarting,
+		},
+		{
 			name:          "fix action in flight is starting",
 			snap:          Snapshot{Probed: true, Alive: false},
 			currentAction: "fix",
@@ -138,6 +150,26 @@ func TestProbeNowStartingFallsToErrorAfterGrace(t *testing.T) {
 	snap := m.ProbeNow(context.Background())
 	if snap.Phase != PhaseError {
 		t.Fatalf("stale-stamp phase: want %q got %q", PhaseError, snap.Phase)
+	}
+}
+
+// TestManagerGetOverlaysCurrentAction pins the Get() overlay that
+// makes a setCurrentAction write visible on the next /status
+// response without waiting for a probe tick. The refresh-safe
+// button-loading behaviour depends on this being observable
+// within one HTTP round-trip of the click.
+func TestManagerGetOverlaysCurrentAction(t *testing.T) {
+	m := NewManager(Runner{Binary: "/usr/bin/true"}, 0, silentLogger())
+	if got := m.Get().CurrentAction; got != "" {
+		t.Fatalf("pre-action CurrentAction: want \"\" got %q", got)
+	}
+	m.setCurrentAction("restart")
+	if got := m.Get().CurrentAction; got != "restart" {
+		t.Fatalf("Get overlay: want %q got %q", "restart", got)
+	}
+	m.clearCurrentAction()
+	if got := m.Get().CurrentAction; got != "" {
+		t.Fatalf("post-clear CurrentAction: want \"\" got %q", got)
 	}
 }
 
