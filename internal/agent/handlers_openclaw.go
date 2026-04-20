@@ -80,8 +80,13 @@ func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 	// Detached from r.Context(): a disconnecting client must not
 	// cancel the cascade. The 90s guardrail ensures a pathological
 	// hang eventually frees the spawned CLI goroutine.
+	//
+	// cancel() is explicitly NOT deferred: returning from the handler
+	// on client disconnect would then fire defer and kill the cascade
+	// we just promised to detach. Each exit path owns the cleanup
+	// (emitFinal calls cancel() after evCh closes; the clientDone
+	// branch spawns a drain-then-cancel goroutine).
 	actionCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
 
 	// Fix's intent is "make the gateway alive"; record it so a failure
 	// to bring the gateway up renders as 异常 (not 已停止) in the UI.
@@ -99,9 +104,14 @@ func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := enc.Encode(ev); err != nil {
 				// Response broken but cascade still runs; drain evCh
-				// in a goroutine so Cascade can complete and stamp
-				// lastStartAttemptAt. Do NOT cancel actionCtx.
-				go drainEvents(evCh)
+				// so Cascade can complete and stamp
+				// lastStartAttemptAt, then cancel() to release the
+				// context. Cancelling eagerly would SIGKILL the CLI
+				// mid-tier.
+				go func() {
+					drainEvents(evCh)
+					cancel()
+				}()
 				return
 			}
 			if flusher != nil {
@@ -109,12 +119,19 @@ func (s *Server) handleOpenclawFix(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-clientDone:
 			// Browser refreshed / tab closed. Keep the cascade alive
-			// so the gateway actually gets repaired; drain silently.
-			go drainEvents(evCh)
+			// so the gateway actually gets repaired; drain silently
+			// and only then release the action context.
+			go func() {
+				drainEvents(evCh)
+				cancel()
+			}()
 			return
 		}
 	}
 emitFinal:
+	// evCh closed: Cascade finished. Release the context now so the
+	// 90s WithTimeout goroutine doesn't linger.
+	cancel()
 	// Emit one terminal event with the post-cascade snapshot so the
 	// UI can render the final state without a follow-up GET.
 	final := struct {
@@ -200,8 +217,13 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 	// never get stamped, so the Phase state machine would fall
 	// through to "error" as soon as the warmup grace expired, even
 	// though the user's intent was merely to reconnect the UI.
+	//
+	// cancel() is explicitly NOT deferred: returning from the handler
+	// on client disconnect would then fire defer and kill the CLI we
+	// just promised to detach. Instead, each exit path owns the
+	// cleanup (emitFinal calls cancel() after the stream closes; the
+	// clientDone branch spawns a drain-then-cancel goroutine).
 	actionCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
 
 	// Record the user's stated intent before dispatching so the UI
 	// badge can distinguish 已停止 (user stopped) from 异常 (crashed /
@@ -233,8 +255,13 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 			if err := enc.Encode(ev); err != nil {
 				// Response broken but RunAction still runs; drain
 				// silently so currentAction and lastStartAttemptAt
-				// still get stamped.
-				go drainEvents(evCh)
+				// still get stamped. Same deferred-cancel pattern as
+				// the clientDone branch: let the CLI finish before
+				// tearing the action context down.
+				go func() {
+					drainEvents(evCh)
+					cancel()
+				}()
 				return
 			}
 			if flusher != nil {
@@ -244,11 +271,25 @@ func (s *Server) handleOpenclawAction(w http.ResponseWriter, r *http.Request) {
 			// Browser refreshed / tab closed. Keep the CLI running
 			// so the Phase state machine reports the real outcome
 			// to whichever client polls /api/openclaw/status next.
-			go drainEvents(evCh)
+			// cancel() is deferred until evCh drains so the action
+			// context stays live for the full CLI lifetime; with an
+			// eager cancel (or a naive defer cancel() on the handler),
+			// the action context would be torn down the instant we
+			// return, sending SIGKILL to the openclaw CLI and
+			// recording a spurious outcome=failed / exit_code=-1 in
+			// the ring buffer that any refreshed client would then
+			// replay as "重启失败".
+			go func() {
+				drainEvents(evCh)
+				cancel()
+			}()
 			return
 		}
 	}
 emitFinal:
+	// evCh closed: RunAction finished naturally. Release the context
+	// now so the 45s WithTimeout goroutine doesn't linger.
+	cancel()
 	// Final event carries the fresh snapshot so the UI can update the
 	// status card without a follow-up GET.
 	final := struct {

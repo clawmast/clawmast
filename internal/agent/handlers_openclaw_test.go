@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -34,6 +35,83 @@ func writeFakeOpenclawBin(t *testing.T, body string) string {
 		t.Fatalf("write fake bin: %v", err)
 	}
 	return p
+}
+
+// TestActionSurvivesClientDisconnect pins the contract that a client
+// refreshing or closing the tab mid-action must NOT kill the CLI.
+// Before the fix this test targets, defer cancel() on the handler
+// would fire on return-from-clientDone, SIGKILL the CLI, and stamp
+// the ring buffer with outcome=failed exit_code=-1 even though the
+// operator's restart had done its useful work. A refreshed client
+// would then replay "重启失败" into the console.
+//
+// The test forces the race by making the fake CLI sleep long enough
+// that we can abort the HTTP client while the action is still running,
+// then asserts the ring buffer eventually reports ok.
+func TestActionSurvivesClientDisconnect(t *testing.T) {
+	bin := writeFakeOpenclawBin(t, `
+case "$1-$2" in
+  gateway-restart) sleep 2; echo "Restarted LaunchAgent"; exit 0 ;;
+  health) echo '{"ok":true,"ts":1,"sessions":{"count":0}}' ;;
+  *) exit 99 ;;
+esac
+`)
+	m := openclaw.NewManager(openclaw.Runner{Binary: bin}, time.Second, nil)
+	srv := NewServer(Config{OpenClaw: m})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// Short client timeout so curl-equivalent disconnects well before
+	// the fake CLI (2 s sleep) finishes. 200 ms gives the server time
+	// to start the CLI; we need the clientDone branch to fire while
+	// RunAction is still mid-sleep.
+	clientCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(clientCtx, "POST",
+		ts.URL+"/api/openclaw/action?name=restart", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		// Drain whatever arrived before the deadline, then abort.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+	// err is expected (context deadline exceeded); we explicitly do
+	// NOT fail on it — the whole point is to simulate a refresh.
+
+	// Poll the action log until the CLI has finished. Upper bound is
+	// generous (5 s) so a slow CI runner doesn't flake; the CLI itself
+	// sleeps 2 s plus overhead.
+	deadline := time.Now().Add(5 * time.Second)
+	var entry openclaw.ActionLogEntry
+	for time.Now().Before(deadline) {
+		entry = m.ActionLog()
+		if entry.Name == "restart" && !entry.Running {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if entry.Name != "restart" {
+		t.Fatalf("action log name: got %q, want restart", entry.Name)
+	}
+	if entry.Running {
+		t.Fatalf("action log still Running=true after %v; CLI was killed?", 5*time.Second)
+	}
+	if entry.Outcome != "ok" {
+		t.Fatalf("action outcome: got %q, want ok (disconnect must not kill CLI)",
+			entry.Outcome)
+	}
+	if len(entry.Events) < 2 {
+		t.Fatalf("want at least start+end events, got %d", len(entry.Events))
+	}
+	// The end event must carry exit_code=0 (not -1 from a signal) and
+	// the stdout tail the CLI actually printed.
+	end := entry.Events[len(entry.Events)-1]
+	if end.Phase != "end" {
+		t.Fatalf("last event phase: got %q, want end", end.Phase)
+	}
+	if end.ExitCode != 0 {
+		t.Fatalf("end.ExitCode: got %d, want 0 (non-zero means SIGKILL)", end.ExitCode)
+	}
 }
 
 // TestActionLogEndpointShape verifies the /api/openclaw/action/log
