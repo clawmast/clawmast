@@ -69,6 +69,16 @@ func (r Runner) runCmd(ctx context.Context, timeout time.Duration, args ...strin
 	// to linger. Windows has no real SIGKILL; TerminateProcess is the
 	// closest match and is what Go already does on that platform.
 	cmd.Cancel = func() error { return cmd.Process.Kill() }
+	// cmd.Cancel SIGKILLs the direct child, but a shell-wrapped fake
+	// CLI (tests) or a real CLI that has already forked a subprocess
+	// can leave grandchildren holding stdout/stderr. Go's cmd.Run
+	// blocks until those pipes close, which on a busy -race runner
+	// can be the full remaining sleep of a hung grandchild (hundreds
+	// of seconds in the worst case). WaitDelay bounds that tail:
+	// after Cancel fires, I/O is forcibly torn down at +500ms so
+	// Run returns promptly. Callers still see DeadlineExceeded via
+	// cctx, so outcome reporting is unchanged.
+	cmd.WaitDelay = 500 * time.Millisecond
 	if r.Env != nil {
 		cmd.Env = r.Env
 	}
