@@ -212,17 +212,13 @@ body {
 .stub .link { margin-top: 8px; }
 
 /* ── Mobile header ──────────────────────────────────────────────── */
-.mobile-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 16px;
-  height: 48px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  position: sticky; top: 0; z-index: 50;
-}
-.mobile-header .logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
-.mobile-header .logo-mark { width: 26px; height: 26px; border-radius: 7px; }
-@media (min-width: 768px) { .mobile-header { display: none; } }
+/* .mobile-header is kept in the DOM for the mirror mechanism (JS
+   writes to data-mirror="status" targets inside it), but visually
+   hidden on all viewports. On desktop the sidebar already shows the
+   logo + Worker badge; on mobile the bottom nav + the OpenClaw card's
+   own badge carry the same information, so a second top-of-page
+   header is pure noise that eats vertical space on small screens. */
+.mobile-header { display: none; }
 
 
 /* ── Main content ───────────────────────────────────────────────── */
