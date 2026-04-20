@@ -292,16 +292,24 @@
   // apply here" without them having to remember which buttons belong
   // to which state.
   //
-  //                   一键修复   启动   停止   重启
-  //   运行中            ✓         ·     ✓      ✓
-  //   异常 (offline)    ✓         ✓     ✓      ·
-  //   已停止             ✓         ✓     ·      ·
-  //   未安装 / 检测中     ·         ·     ·      ·
+  //                    一键修复   启动   停止   重启
+  //   运行中             ✓         ·     ✓      ✓
+  //   异常 (offline)     ✓         ✓     ✓      ·
+  //   已停止              ✓         ✓     ·      ·
+  //   启动中 (starting)  ✓         ·     ·      ·
+  //   未安装 / 检测中      ·         ·     ·      ·
   //
   // 一键修复 is state-independent because it repairs config / service
   // / env — useful regardless of live state. 启动/停止/重启 are
   // state-dependent: each only enables when its target transition
   // makes sense.
+  //
+  // The "starting" row covers the 15 s warmup-grace window between
+  // a CLI returning and the gateway actually probing alive: the
+  // backend has already cleared current_action (so no local or
+  // adopted activeAction locks the overlay) but phase is still
+  // "starting". Without its own row we used to fall through to
+  // "offline", which incorrectly re-enabled start+stop mid-warmup.
   //
   // runAction() disables every button for the duration of a request
   // and calls pollOpenClaw() at the end, which re-enters this
@@ -328,6 +336,15 @@
     } else if (mode === "stopped") {
       btns.fix.disabled = false;
       btns.start.disabled = false;
+      btns.restart.disabled = true;
+      btns.stop.disabled = true;
+    } else if (mode === "starting") {
+      // Warmup grace: CLI has exited cleanly, the gateway is coming
+      // up on its own. Fix stays open as the state-independent
+      // escape hatch; start/restart/stop are frozen so the operator
+      // doesn't race a second CLI into the grace window.
+      btns.fix.disabled = false;
+      btns.start.disabled = true;
       btns.restart.disabled = true;
       btns.stop.disabled = true;
     } else { // "unknown" or "missing"
@@ -532,8 +549,15 @@
         // mental model is "it's coming up" — blue, breathing, no
         // error. Even a page refresh during warmup keeps this state
         // because lastStartAttemptAt lives on the Manager.
+        //
+        // Buttons go to the dedicated "starting" set (only fix
+        // enabled): during sub-state (a) the pending overlay below
+        // will still disable all 4 because activeAction is set, but
+        // during sub-state (b) current_action is already cleared
+        // and this is the ONLY guard keeping start/stop disabled
+        // during the warmup window.
         setOpenclawBadge("starting", "启动中");
-        setActionState("offline");
+        setActionState("starting");
         setOpenclawTone("info");
         setOpenclawSub("正在启动 OpenClaw…");
         setGatewayRow("starting", "启动中…");
