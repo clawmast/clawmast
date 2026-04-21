@@ -1,0 +1,43 @@
+{
+  "channel": "beta",
+  "version": "v0.1.0-rc.1",
+  "published_at": "2026-04-21T08:41:25.980679738Z",
+  "notes": "Automated release v0.1.0-rc.1.",
+  "artifacts": [
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "url": "https://github.com/clawmast/clawmast/releases/download/v0.1.0-rc.1/clawmast-darwin-amd64.tar.gz",
+      "size": 3220442,
+      "sha256": "f8d28de91507e3e986511cefea2ea1377cdebc4719c78f4ef97b3d8365c98972"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/clawmast/clawmast/releases/download/v0.1.0-rc.1/clawmast-darwin-arm64.tar.gz",
+      "size": 2975741,
+      "sha256": "cd954bbc053a2d8c02e31a1fbf7d9c66b33eb2657fc7760bc5f1569e6aea8d06"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "url": "https://github.com/clawmast/clawmast/releases/download/v0.1.0-rc.1/clawmast-linux-amd64.tar.gz",
+      "size": 3184987,
+      "sha256": "d7d8a94302398466356c172236b2db1fb3d0ecaa326f101e3fce8e083ab0c217"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "url": "https://github.com/clawmast/clawmast/releases/download/v0.1.0-rc.1/clawmast-linux-arm64.tar.gz",
+      "size": 2883705,
+      "sha256": "be4441bf53c456cd17966e7cd0118be46c370d1fcb822ffa3a8893342bd48b08"
+    },
+    {
+      "os": "windows",
+      "arch": "amd64",
+      "url": "https://github.com/clawmast/clawmast/releases/download/v0.1.0-rc.1/clawmast-windows-amd64.tar.gz",
+      "size": 3212742,
+      "sha256": "36ed6fc8b7b76ffe4fb555c3e44888f592ab9f0d0778207e6f3fbd83c30022b4"
+    }
+  ]
+}
