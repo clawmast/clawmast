@@ -1,18 +1,28 @@
 name: Release
 
 # Cross-compile the ClawMast worker for every Tier 1 / Tier 2 target,
-# build and minisign-sign the update manifest, and publish both to a
-# GitHub Release whose assets match manifest.json's artefact URLs
-# exactly. Clients fetching
+# sign the update manifest with minisign, and publish:
 #
-#   https://github.com/<org>/<repo>/releases/download/<tag>/manifest.json
+#   1. Tarballs + manifest.json + manifest.json.minisig attached to a
+#      GitHub Release at
+#        https://github.com/<org>/<repo>/releases/download/<tag>/…
+#      (immutable per-version; this is where tarball URLs point).
 #
-# verify the signature against the minisign public key embedded in
-# their worker binary (internal/updater/devkey.pub — to be rotated to
-# a production key before the first user-facing release).
+#   2. manifest.json + manifest.json.minisig mirrored to the
+#      `gh-pages` branch at
+#        /stable/manifest.json
+#        /stable/manifest.json.minisig
+#      so clients fetching the channel-level URL
+#        https://<org>.github.io/<repo>/stable/manifest.json
+#      always see the latest release without a per-tag redirect.
 #
-# The workflow is triggered by a `v*` tag push and by manual dispatch
-# for dry-run rehearsals.
+# Both surfaces are signed with the production key (ID
+# FD412C2F6CA2B447) whose public half is embedded in every worker via
+# internal/updater/devkey.pub. The private half lives only in the
+# MINISIGN_PRIVATE_KEY repository secret.
+#
+# Triggers: `v*` tag push (canonical release path), or manual dispatch
+# for dry-run rehearsals against an existing tag.
 
 on:
   push:
@@ -35,14 +45,33 @@ jobs:
     name: build, sign, publish
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve tag
+      - name: Resolve tag and channel
         id: tag
+        # The channel decides two coupled things: the -channel value
+        # baked into the manifest (which updater.Client enforces via
+        # ErrChannelMismatch) and the gh-pages subdirectory the
+        # manifest is published to. A tag containing a hyphen is a
+        # SemVer pre-release (rc / beta / alpha / …) and routes to
+        # `beta`; a clean vN.N.N tag routes to `stable`. Both values
+        # MUST be resolved from the same expression so a drift in
+        # future refactors cannot publish a manifest to /beta/ that
+        # the worker will then refuse as channel-mismatch.
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            value="${GITHUB_REF#refs/tags/}"
           else
-            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            value="${{ github.event.inputs.tag }}"
           fi
+          if [[ "${value}" == *-* ]]; then
+            channel="beta"
+          else
+            channel="stable"
+          fi
+          {
+            echo "value=${value}"
+            echo "channel=${channel}"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Releasing ${value} to channel=${channel}"
 
       - uses: actions/checkout@v6
         with:
@@ -74,12 +103,13 @@ jobs:
       - name: Generate manifest
         env:
           TAG: ${{ steps.tag.outputs.value }}
+          CHANNEL: ${{ steps.tag.outputs.channel }}
           REPO: ${{ github.repository }}
         run: |
           bin/clawmast-release manifest \
             -dir dist \
             -out dist/manifest.json \
-            -channel stable \
+            -channel "${CHANNEL}" \
             -version "${TAG}" \
             -base-url "https://github.com/${REPO}/releases/download/${TAG}" \
             -notes "Automated release ${TAG}."
@@ -118,3 +148,28 @@ jobs:
             dist/clawmast-*.tar.gz
             dist/manifest.json
             dist/manifest.json.minisig
+
+      # Mirror the signed manifest to the gh-pages branch so clients
+      # reach it at a channel-level URL that does not move with each
+      # tag. Tarballs stay on the GitHub Release; only the small text
+      # artefacts land on Pages. keep_files: true preserves any other
+      # channel subdirectory (and ad-hoc files like .nojekyll) that
+      # already live on gh-pages.
+      - name: Stage channel content for gh-pages
+        env:
+          CHANNEL: ${{ steps.tag.outputs.channel }}
+        run: |
+          mkdir -p "channel-stage/${CHANNEL}"
+          cp dist/manifest.json dist/manifest.json.minisig "channel-stage/${CHANNEL}/"
+          ls -la "channel-stage/${CHANNEL}"
+
+      - name: Publish manifest to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: channel-stage
+          keep_files: true
+          user_name: github-actions[bot]
+          user_email: 41898282+github-actions[bot]@users.noreply.github.com
+          commit_message: "publish ${{ steps.tag.outputs.value }} manifest to ${{ steps.tag.outputs.channel }} channel"
