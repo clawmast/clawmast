@@ -165,7 +165,8 @@ cmd_publish() {
   sha="$(shasum -a 256 "${CHAN_ROOT}/${tarball}" | awk '{print $1}')"
   size="$(wc -c < "${CHAN_ROOT}/${tarball}" | tr -d ' ')"
 
-  cat > "${CHAN_ROOT}/manifest.json" <<JSON
+  mkdir -p "${CHAN_ROOT}/${channel}"
+  cat > "${CHAN_ROOT}/${channel}/manifest.json" <<JSON
 {
   "channel": "${channel}",
   "version": "${version}",
@@ -183,11 +184,11 @@ cmd_publish() {
 JSON
   "${TMP}/clawmast-release" sign \
     -key "${SECRET_KEY}" \
-    -in "${CHAN_ROOT}/manifest.json" \
-    -out "${CHAN_ROOT}/manifest.json.minisig"
+    -in "${CHAN_ROOT}/${channel}/manifest.json" \
+    -out "${CHAN_ROOT}/${channel}/manifest.json.minisig"
 
   msg "published ${version} on channel '${channel}'"
-  msg "  manifest  ${CHAN_ROOT}/manifest.json"
+  msg "  manifest  ${CHAN_ROOT}/${channel}/manifest.json"
   msg "  artifact  ${CHAN_ROOT}/${tarball} (${size} bytes, sha256 ${sha:0:12}…)"
   msg ""
   msg "in the UI: open settings → 点「检查更新」→ 应该看到 ${version} 可安装。"

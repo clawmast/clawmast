@@ -85,9 +85,10 @@ KEY="${PREFIX}/channel.key"
 chmod 600 "${KEY}"
 
 echo "[rs] generating manifest pinned at http://127.0.0.1:${CHAN_PORT}"
+mkdir -p "${CHAN_ROOT}/stable"
 "${PREFIX}/clawmast-release" manifest \
   -dir "${DIST}" \
-  -out "${CHAN_ROOT}/manifest.json" \
+  -out "${CHAN_ROOT}/stable/manifest.json" \
   -channel stable \
   -version "${VERSION}" \
   -base-url "http://127.0.0.1:${CHAN_PORT}" \
@@ -100,10 +101,10 @@ cp "${TARBALL}" "${CHAN_ROOT}/"
 echo "[rs] signing manifest"
 "${PREFIX}/clawmast-release" sign \
   -key "${KEY}" \
-  -in "${CHAN_ROOT}/manifest.json" \
-  -out "${CHAN_ROOT}/manifest.json.minisig" \
+  -in "${CHAN_ROOT}/stable/manifest.json" \
+  -out "${CHAN_ROOT}/stable/manifest.json.minisig" \
   -comment "${VERSION}"
-ls -la "${CHAN_ROOT}"
+ls -la "${CHAN_ROOT}/stable"
 
 echo "[rs] starting channel server on :${CHAN_PORT}"
 (cd "${CHAN_ROOT}" && exec python3 -m http.server "${CHAN_PORT}") >"${PREFIX}/chan.log" 2>&1 &
