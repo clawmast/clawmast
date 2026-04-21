@@ -40,6 +40,14 @@ INSTALL_SERVICE="yes"
 INSTALL_SYMLINKS=""
 FORCE="no"
 CHANNEL_DEFAULT="stable"
+# UPDATE_URL_DEFAULT is the production update host. The worker
+# composes full manifest URLs as "${UPDATE_URL}/<channel>/manifest.json"
+# (internal/updater/client.go), so this is the channel-root, not a
+# per-channel path. CLAWMAST_UPDATE_URL in the environment overrides
+# it — useful for the playground / smoke scripts that serve a local
+# channel on 127.0.0.1.
+UPDATE_URL_DEFAULT="https://clawmast.github.io/clawmast"
+UPDATE_URL="${CLAWMAST_UPDATE_URL:-${UPDATE_URL_DEFAULT}}"
 
 usage() {
   cat <<'EOF'
@@ -70,6 +78,10 @@ Options:
 
 Environment overrides:
   CLAWMAST_HOME           Default for --prefix
+  CLAWMAST_UPDATE_URL     Channel host the worker checks (default:
+                          https://clawmast.github.io/clawmast). Must
+                          serve /<channel>/manifest.json and
+                          /<channel>/manifest.json.minisig.
 EOF
 }
 
@@ -359,7 +371,8 @@ install_launchd() {
     CLAWMASTD_BIN  "${PREFIX}/bin/clawmastd" \
     CLAWMAST_HOME  "${PREFIX}" \
     LOG_DIR        "${PREFIX}/logs" \
-    HOME_LOCAL_BIN "${HOME}/.local/bin"
+    HOME_LOCAL_BIN "${HOME}/.local/bin" \
+    UPDATE_URL     "${UPDATE_URL}"
   chmod 0644 "${plist}"
   log "wrote ${plist}"
 
@@ -376,7 +389,8 @@ install_systemd_user() {
   render_template "${TEMPLATES_DIR}/clawmastd.service.tmpl" "${unit}" \
     CLAWMASTD_BIN  "${PREFIX}/bin/clawmastd" \
     CLAWMAST_HOME  "${PREFIX}" \
-    HOME_LOCAL_BIN "${HOME}/.local/bin"
+    HOME_LOCAL_BIN "${HOME}/.local/bin" \
+    UPDATE_URL     "${UPDATE_URL}"
   chmod 0644 "${unit}"
   log "wrote ${unit}"
 
