@@ -133,6 +133,16 @@ func runWorker(ctx context.Context, out io.Writer, logger *slog.Logger) error {
 			OpenClaw:          ocMgr,
 			Token:             tok,
 			SupervisorVersion: os.Getenv("CLAWMAST_SUPERVISOR_VERSION"),
+			// Poll the channel every 6h so the UI can light up a
+			// "new version" hint without the operator clicking
+			// "check" first. First tick after 60s gives the worker
+			// time to finish startup (openclaw discovery, blacklist
+			// load) before burning bandwidth. CLAWMAST_UPDATE_URL
+			// being empty still short-circuits runUpdateCheck to
+			// source="not-configured", so this is safe to enable
+			// unconditionally.
+			CheckInterval:   6 * time.Hour,
+			FirstCheckDelay: 60 * time.Second,
 		})
 		go func() { httpErrCh <- srv.Start(ctx) }()
 		// Give the listener a beat to bind so logs stay ordered; the

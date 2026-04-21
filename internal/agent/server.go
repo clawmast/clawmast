@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"aead.dev/minisign"
@@ -95,6 +96,22 @@ type Config struct {
 	// write path locked (returns 503) while GET still succeeds with the
 	// ambient channel.
 	StateDir string
+	// CheckInterval schedules a background signed-manifest check every
+	// tick so the UI can show a "new version available" hint without
+	// the operator clicking anything first. Zero (the default) disables
+	// the loop entirely — used in tests and in the "standalone, no
+	// supervisor" config where we don't want an orphan goroutine.
+	//
+	// Run.go wires this to 6h for production. The loop observes the
+	// Start() context, so Shutdown cancels the next tick cleanly.
+	CheckInterval time.Duration
+	// FirstCheckDelay offsets the first tick from process start. Zero
+	// means "wait one full CheckInterval before the first check",
+	// which would starve users who open the UI right after install;
+	// run.go sets this to 60s so the first check fires ~1 minute after
+	// clawmastd brings the worker up. Tests use 0 or a few ms to keep
+	// the fast path fast.
+	FirstCheckDelay time.Duration
 }
 
 // DefaultAddr binds on loopback so the first-run experience on macOS
@@ -121,6 +138,13 @@ type Server struct {
 	// so handler methods can check one field instead of chasing the
 	// config pointer.
 	openclaw *openclaw.Manager
+	// bgCheck caches the most recent background update-check outcome
+	// (see RunBackgroundChecks). Nil / zero until the first tick lands.
+	// This commit only populates the cache; exposing it to the UI is a
+	// follow-up so the commit boundary stays at "worker now polls".
+	bgCheckMu sync.Mutex
+	bgCheckAt time.Time
+	bgCheck   *UpdateCheckResponse
 }
 
 // NewServer constructs a Server but does not bind the listener; call
@@ -233,6 +257,13 @@ func (s *Server) Start(ctx context.Context) error {
 	s.log.Info("http server listening",
 		"component", "agent", "addr", ln.Addr().String())
 
+	// Launch the periodic update-check loop iff CheckInterval was
+	// configured. The goroutine observes the Start() context, so the
+	// same ctx cancellation that stops Serve also drains the next tick.
+	if s.cfg.CheckInterval > 0 {
+		go s.RunBackgroundChecks(ctx)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		err := s.srv.Serve(ln)
@@ -248,6 +279,108 @@ func (s *Server) Start(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// RunBackgroundChecks polls the configured update channel on a fixed
+// interval and stashes the outcome in the Server's in-memory cache.
+// It blocks until ctx is cancelled and is safe to call directly from
+// tests that want to exercise a tick without going through Start().
+//
+// Each iteration budgets 30s for the round trip — generous enough to
+// tolerate a tarpitted manifest host without blowing up the next tick,
+// while still bounded so a hung TLS handshake cannot freeze the loop
+// indefinitely. The returned UpdateCheckResponse is the same shape the
+// HTTP handler emits so a follow-up commit can expose the cache to
+// the UI with no extra serialization layer.
+//
+// Errors are logged at the appropriate level and otherwise swallowed:
+// a failed check should never take the worker down. Likewise a stale
+// cache entry is preferred over clearing the cache on transient
+// failures — the UI's "update available" hint then ages gracefully.
+func (s *Server) RunBackgroundChecks(ctx context.Context) {
+	if s.cfg.CheckInterval <= 0 {
+		return
+	}
+	delay := s.cfg.FirstCheckDelay
+	if delay <= 0 {
+		delay = s.cfg.CheckInterval
+	}
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		tickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		resp := s.runUpdateCheck(tickCtx)
+		cancel()
+		s.recordBackgroundCheck(resp)
+		t.Reset(s.cfg.CheckInterval)
+	}
+}
+
+// recordBackgroundCheck stores the tick outcome under bgCheckMu and
+// emits a single log line per tick so operators grepping journalctl
+// can confirm the worker is talking to its channel. The snapshot is
+// value-copied so a later mutation of the slice returned by the
+// updater can't race with a reader.
+func (s *Server) recordBackgroundCheck(resp UpdateCheckResponse) {
+	now := time.Now().UTC()
+	s.bgCheckMu.Lock()
+	s.bgCheckAt = now
+	snap := resp
+	s.bgCheck = &snap
+	s.bgCheckMu.Unlock()
+
+	switch resp.Source {
+	case "signed-manifest":
+		if resp.UpdateAvailable {
+			s.log.Info("background update check: new version",
+				"component", "agent",
+				"current", resp.Current,
+				"latest", resp.Latest,
+				"channel", resp.Channel)
+		} else {
+			s.log.Debug("background update check: up to date",
+				"component", "agent",
+				"version", resp.Current,
+				"channel", resp.Channel)
+		}
+	case "error":
+		s.log.Warn("background update check failed",
+			"component", "agent",
+			"error_code", resp.ErrorCode,
+			"note", resp.Note)
+	case "not-configured":
+		// RunBackgroundChecks shouldn't fire at all in this state
+		// because Start gates the goroutine on CheckInterval > 0
+		// and the operator who set CheckInterval almost certainly
+		// also set UpdateBaseURL; still, log at Debug so the path
+		// is observable if we ever end up here.
+		s.log.Debug("background update check skipped: updater not configured",
+			"component", "agent")
+	}
+}
+
+// LastBackgroundCheck returns a copy of the most recent background
+// update-check outcome plus its timestamp, or (nil, zero) if the loop
+// has not produced a result yet (either CheckInterval==0 or the first
+// tick has not fired). Callers may read concurrently; the returned
+// pointer is a value copy so subsequent ticks cannot race the reader.
+//
+// Intended for a follow-up UI endpoint that surfaces "update available
+// as of N minutes ago" without the operator clicking "check". Exposed
+// now so the RunBackgroundChecks loop is observable in tests.
+func (s *Server) LastBackgroundCheck() (*UpdateCheckResponse, time.Time) {
+	s.bgCheckMu.Lock()
+	defer s.bgCheckMu.Unlock()
+	if s.bgCheck == nil {
+		return nil, time.Time{}
+	}
+	snap := *s.bgCheck
+	return &snap, s.bgCheckAt
 }
 
 // Addr returns the bound listen address, useful in tests that use
