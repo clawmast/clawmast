@@ -116,24 +116,36 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 // The request carries no body today; POST was chosen during Iteration 0
 // to leave room for channel / force flags without breaking a cached GET.
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.runUpdateCheck(ctx))
+}
+
+// runUpdateCheck performs the signed-manifest round trip and returns a
+// response payload without writing to the wire. Both handleUpdateCheck
+// and the background loop (RunBackgroundChecks) call through here so
+// the two paths classify errors identically and the UI can be sure
+// "source=signed-manifest" means the same thing regardless of who
+// triggered the check.
+//
+// The caller owns the context; runUpdateCheck does not impose its own
+// timeout so the background loop can budget a longer deadline than a
+// synchronous HTTP request would tolerate.
+func (s *Server) runUpdateCheck(ctx context.Context) UpdateCheckResponse {
 	current := currentVersionLabel()
 	if s.updater == nil {
-		writeJSON(w, http.StatusOK, UpdateCheckResponse{
+		return UpdateCheckResponse{
 			Current:         current,
 			Latest:          current,
 			UpdateAvailable: false,
 			Channel:         s.cfg.UpdateChannel,
 			Source:          "not-configured",
 			Note:            "CLAWMAST_UPDATE_URL is unset; set it to the channel base URL (for example https://update.clawmast.com/stable) to enable update checks.",
-		})
-		return
+		}
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-	defer cancel()
 	manifest, err := s.updater.Check(ctx)
 	if err != nil {
-		writeJSON(w, http.StatusOK, UpdateCheckResponse{
+		return UpdateCheckResponse{
 			Current:         current,
 			Latest:          current,
 			UpdateAvailable: false,
@@ -141,10 +153,9 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 			Source:          "error",
 			ErrorCode:       classifyUpdaterError(err),
 			Note:            err.Error(),
-		})
-		return
+		}
 	}
-	writeJSON(w, http.StatusOK, UpdateCheckResponse{
+	return UpdateCheckResponse{
 		Current:         current,
 		Latest:          manifest.Version,
 		UpdateAvailable: manifest.Version != current,
@@ -152,7 +163,7 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		Source:          "signed-manifest",
 		PublishedAt:     manifest.PublishedAt.UTC().Format(time.RFC3339),
 		Notes:           manifest.Notes,
-	})
+	}
 }
 
 // classifyUpdaterError maps the updater package's sentinel errors to
