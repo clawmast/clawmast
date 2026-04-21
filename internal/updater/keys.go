@@ -7,25 +7,32 @@ import (
 	"aead.dev/minisign"
 )
 
-// devPubKey is the development minisign public key embedded into every
-// binary. It is used by default when CLAWMAST_UPDATE_PUBKEY is not set.
+// devPubKeyText is the production minisign public key embedded into
+// every binary. It is used by default when CLAWMAST_UPDATE_PUBKEY is
+// not set, which is the normal production path. The identifier and
+// the filename are kept as "dev*" for git-history continuity with
+// iteration-2 commits; the key material itself was rotated to prod
+// at v0.1.0-rc.1 and is no longer a development key.
 //
-// Key ID 6D3113C6E0D40175. Rotating this key — Decision #6 in
-// architecture/refactor.md §10 — will land together with the first
-// signed production release; until then the embedded key is
-// sufficient for the auto-update flow to be "enforced" rather than
-// optional.
+// Key ID FD412C2F6CA2B447. The private half lives only in the
+// maintainer's password manager and in the release workflow's
+// MINISIGN_PRIVATE_KEY secret. Rotating it — Decision #6 in
+// architecture/refactor.md §10 — requires a client-side rotation
+// protocol that does not yet exist, so the key is treated as
+// permanent for every shipped binary.
 //
 //go:embed devkey.pub
 var devPubKeyText []byte
 
-// DevPublicKey returns the embedded development minisign public key.
-// A parse error here means the build is corrupt; it is reported as a
-// fatal-shaped error so callers in main() can fail fast.
+// DevPublicKey returns the embedded minisign public key. The "Dev"
+// prefix is historical (see devPubKeyText); the returned key is the
+// production channel key since v0.1.0-rc.1. A parse error here means
+// the build is corrupt, which is reported as a fatal-shaped error so
+// callers in main() can fail fast.
 func DevPublicKey() (minisign.PublicKey, error) {
 	var pk minisign.PublicKey
 	if err := pk.UnmarshalText(devPubKeyText); err != nil {
-		return minisign.PublicKey{}, fmt.Errorf("updater: embedded dev pubkey is unparseable: %w", err)
+		return minisign.PublicKey{}, fmt.Errorf("updater: embedded pubkey is unparseable: %w", err)
 	}
 	return pk, nil
 }
