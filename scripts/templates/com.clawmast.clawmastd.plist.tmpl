@@ -16,6 +16,14 @@
     <dict>
         <key>CLAWMAST_HOME</key>
         <string>@@CLAWMAST_HOME@@</string>
+        <!-- CLAWMAST_UPDATE_URL is the channel host. The client
+             composes ${URL}/<channel>/manifest.json at fetch time,
+             with the channel coming from
+             ${CLAWMAST_HOME}/state/channel (seeded by install.sh).
+             Override at install time with
+             CLAWMAST_UPDATE_URL=... install.sh. -->
+        <key>CLAWMAST_UPDATE_URL</key>
+        <string>@@UPDATE_URL@@</string>
         <!-- launchd strips PATH to /usr/bin:/bin:/usr/sbin:/sbin, which
              hides Homebrew (/opt/homebrew/bin, /usr/local/bin) and every
              per-user Node toolchain. The worker's openclaw discovery
