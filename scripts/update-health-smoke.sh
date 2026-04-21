@@ -137,7 +137,8 @@ KEY="${TMP}/channel.key"
 "${TMP}/clawmast-release" keygen -pub "${PUB}" > "${KEY}"
 chmod 600 "${KEY}"
 
-cat > "${CHAN_ROOT}/manifest.json" <<JSON
+mkdir -p "${CHAN_ROOT}/stable"
+cat > "${CHAN_ROOT}/stable/manifest.json" <<JSON
 {
   "channel": "stable",
   "version": "v0.0.2",
@@ -154,7 +155,8 @@ cat > "${CHAN_ROOT}/manifest.json" <<JSON
 }
 JSON
 "${TMP}/clawmast-release" sign \
-  -key "${KEY}" -in "${CHAN_ROOT}/manifest.json" -out "${CHAN_ROOT}/manifest.json.minisig"
+  -key "${KEY}" -in "${CHAN_ROOT}/stable/manifest.json" \
+  -out "${CHAN_ROOT}/stable/manifest.json.minisig"
 
 echo "[hg] starting local channel on :${CHAN_PORT}"
 (cd "${CHAN_ROOT}" && exec python3 -m http.server "${CHAN_PORT}") >"${PREFIX}/chan.log" 2>&1 &

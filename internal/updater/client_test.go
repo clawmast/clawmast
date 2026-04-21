@@ -42,7 +42,7 @@ func TestClientCheckHappyPath(t *testing.T) {
 	}
 	sig := minisign.Sign(priv, body)
 
-	srv := fakeChannel(t, body, sig)
+	srv := fakeChannel(t, "stable", body, sig)
 	defer srv.Close()
 
 	client := updater.New(srv.URL, "stable", pub)
@@ -70,7 +70,7 @@ func TestClientCheckRejectsTamperedManifest(t *testing.T) {
 	sig := minisign.Sign(priv, good)
 
 	tampered := strings.Replace(string(good), "v0.2.0", "v9.9.9", 1)
-	srv := fakeChannel(t, []byte(tampered), sig)
+	srv := fakeChannel(t, "stable", []byte(tampered), sig)
 	defer srv.Close()
 
 	_, err = updater.New(srv.URL, "stable", pub).Check(context.Background())
@@ -87,7 +87,10 @@ func TestClientCheckRejectsChannelMismatch(t *testing.T) {
 	body := mustMarshalManifest(t, "beta", "v0.2.0")
 	sig := minisign.Sign(priv, body)
 
-	srv := fakeChannel(t, body, sig)
+	// Client is configured for "stable" so it requests
+	// /stable/manifest.json; the fake server serves a beta-labelled
+	// manifest there to exercise the channel-mismatch path.
+	srv := fakeChannel(t, "stable", body, sig)
 	defer srv.Close()
 
 	_, err = updater.New(srv.URL, "stable", pub).Check(context.Background())
@@ -109,7 +112,7 @@ func TestClientCheckRejectsWrongKey(t *testing.T) {
 	body := mustMarshalManifest(t, "stable", "v0.2.0")
 	sig := minisign.Sign(priv1, body)
 
-	srv := fakeChannel(t, body, sig)
+	srv := fakeChannel(t, "stable", body, sig)
 	defer srv.Close()
 
 	_, err = updater.New(srv.URL, "stable", pub2).Check(context.Background())
@@ -147,14 +150,18 @@ func TestClientCheckRejectsInvalidBaseURL(t *testing.T) {
 	}
 }
 
-func fakeChannel(t *testing.T, manifest, sig []byte) *httptest.Server {
+// fakeChannel stands in for the HTTP channel host. channel is the
+// per-channel URL prefix the client will actually GET (the client
+// appends "/<channel>/manifest.json" to its BaseURL), so tests pass
+// the same channel name they give to updater.New.
+func fakeChannel(t *testing.T, channel string, manifest, sig []byte) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/"+updater.ManifestFilename, func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/"+channel+"/"+updater.ManifestFilename, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(manifest)
 	})
-	mux.HandleFunc("/"+updater.SignatureFilename, func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/"+channel+"/"+updater.SignatureFilename, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write(sig)
 	})

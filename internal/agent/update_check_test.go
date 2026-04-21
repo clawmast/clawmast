@@ -132,13 +132,17 @@ func callUpdateCheck(t *testing.T, cfg agent.Config) agent.UpdateCheckResponse {
 	return resp
 }
 
+// fakeChannel serves manifest + signature under the "/stable/" prefix
+// to match updater.Client's URL composition, which now appends the
+// channel name between BaseURL and the manifest filename. Tests that
+// need a different channel prefix should inline their own server.
 func fakeChannel(t *testing.T, manifest, sig []byte) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/"+updater.ManifestFilename, func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/stable/"+updater.ManifestFilename, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(manifest)
 	})
-	mux.HandleFunc("/"+updater.SignatureFilename, func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/stable/"+updater.SignatureFilename, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(sig)
 	})
 	return httptest.NewServer(mux)

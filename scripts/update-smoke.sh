@@ -65,8 +65,9 @@ chmod 600 "${KEY}"
 
 echo "[up] building channel root with a manifest"
 CHAN_ROOT="${PREFIX}/channel"
-mkdir -p "${CHAN_ROOT}"
-cat > "${CHAN_ROOT}/manifest.json" <<'JSON'
+MANIFEST="${CHAN_ROOT}/stable/manifest.json"
+mkdir -p "${CHAN_ROOT}/stable"
+cat > "${MANIFEST}" <<'JSON'
 {
   "channel": "stable",
   "version": "v9.9.9",
@@ -83,7 +84,7 @@ cat > "${CHAN_ROOT}/manifest.json" <<'JSON'
 }
 JSON
 "${PREFIX}/clawmast-release" sign \
-  -key "${KEY}" -in "${CHAN_ROOT}/manifest.json" -out "${CHAN_ROOT}/manifest.json.minisig"
+  -key "${KEY}" -in "${MANIFEST}" -out "${MANIFEST}.minisig"
 
 echo "[up] starting local channel HTTP server on port ${CHAN_PORT}"
 # `exec` replaces the subshell with python so SERVER_PID is the actual
@@ -117,7 +118,7 @@ echo "${resp}" | grep -q '"update_available":true'   || { echo "[up] FAIL: updat
 echo "${resp}" | grep -q '"channel":"stable"'        || { echo "[up] FAIL: channel != stable"; exit 1; }
 
 echo "[up] tampering manifest (flip version) to force signature failure"
-sed -i.bak 's/v9.9.9/v8.8.8/' "${CHAN_ROOT}/manifest.json"
+sed -i.bak 's/v9.9.9/v8.8.8/' "${MANIFEST}"
 
 resp="$(curl -s -X POST "http://127.0.0.1:${WORKER_PORT}/api/updates/check")"
 echo "    ${resp}"
@@ -126,7 +127,7 @@ echo "${resp}" | grep -q '"error_code":"bad-signature"'      || { echo "[up] FAI
 echo "${resp}" | grep -q '"update_available":false'          || { echo "[up] FAIL: tampered update_available != false"; exit 1; }
 
 echo "[up] restoring manifest and re-checking (happy path again)"
-mv "${CHAN_ROOT}/manifest.json.bak" "${CHAN_ROOT}/manifest.json"
+mv "${MANIFEST}.bak" "${MANIFEST}"
 
 resp="$(curl -s -X POST "http://127.0.0.1:${WORKER_PORT}/api/updates/check")"
 echo "    ${resp}"

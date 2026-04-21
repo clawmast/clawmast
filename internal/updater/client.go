@@ -52,11 +52,16 @@ var (
 // Client fetches and verifies manifests from one channel. Zero value
 // is not usable; construct via New.
 type Client struct {
-	// BaseURL is the directory that serves manifest.json and
-	// manifest.json.minisig — for example
-	// "https://update.clawmast.com/stable" or
-	// "https://github.com/clawmast/clawmast/releases/download/channel-stable".
-	// The trailing slash is optional.
+	// BaseURL is the root URL that serves per-channel manifests. The
+	// client appends "/<channel>/manifest.json" and
+	// "/<channel>/manifest.json.minisig" when fetching — for example
+	// BaseURL = "https://clawmast.github.io/clawmast" + Channel =
+	// "stable" resolves to
+	// "https://clawmast.github.io/clawmast/stable/manifest.json".
+	// The trailing slash on BaseURL is optional. Routing the channel
+	// through the URL (rather than baking it in) lets the supervisor
+	// respawn the worker after a /api/settings/channel switch without
+	// re-reading the launchd / systemd unit.
 	BaseURL string
 
 	// Channel is the channel name the caller expects the manifest
@@ -126,7 +131,11 @@ func (c *Client) urls() (string, string, error) {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
 		return "", "", fmt.Errorf("%w: %q", ErrBadURL, c.BaseURL)
 	}
-	base := strings.TrimRight(c.BaseURL, "/")
+	channel := c.Channel
+	if channel == "" {
+		channel = DefaultChannel
+	}
+	base := strings.TrimRight(c.BaseURL, "/") + "/" + channel
 	return base + "/" + ManifestFilename, base + "/" + SignatureFilename, nil
 }
 
