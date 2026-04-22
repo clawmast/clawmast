@@ -30,8 +30,17 @@ DEFAULT_PREFIX_XDG="${HOME}/.local/share/clawmast"
 LEGACY_PREFIX="${HOME}/.clawmast"
 PREFIX="${CLAWMAST_HOME:-}"   # empty => resolve below
 VERSION_LABEL=""
-SOURCE_MODE="auto"      # auto | local | build
+SOURCE_MODE="auto"      # auto | local | build | release
 BIN_DIR=""              # override of ${REPO_ROOT}/bin; see --bin-dir
+# RELEASE_TMP is the scratch directory --source=release downloads the
+# manifest + tarball into. ensure_binaries sets it after a successful
+# acquire; the EXIT trap in main clears it so a broken install never
+# leaves a half-extracted tarball lying around under /tmp.
+RELEASE_TMP=""
+# CHANNEL picks which manifest.json the release mode consumes. The
+# worker persists its own per-install channel under state/channel; this
+# knob is only consulted during the first install's tarball download.
+CHANNEL="${CLAWMAST_CHANNEL:-stable}"
 INSTALL_SERVICE="yes"
 # INSTALL_SYMLINKS stays unset here so we can distinguish "user didn't
 # say" from "user said yes". main() below flips the default to "no"
@@ -60,10 +69,17 @@ Options:
                               install (legacy compat);
                           (3) ~/.local/share/clawmast (XDG).
   --version LABEL         Version directory name under versions/ (default: derived)
-  --source {auto|local|build}
-                          auto  — prefer ./bin, fall back to `go build` (default)
-                          local — require pre-built binaries in ./bin
-                          build — always rebuild from this repo
+  --source {auto|local|build|release}
+                          auto    — prefer ./bin when running from a repo
+                                    checkout; else download the signed
+                                    release tarball (default)
+                          local   — require pre-built binaries in ./bin
+                          build   — always rebuild from this repo (needs go)
+                          release — download + sha256-verify the tarball
+                                    advertised by --channel's manifest
+  --channel NAME          Update channel consulted by --source=release.
+                          Default: ${CLAWMAST_CHANNEL:-stable}. Use
+                          --channel=beta to install the latest rc/alpha.
   --bin-dir PATH          Read pre-built clawmast / clawmastd from PATH
                           instead of ./bin. Forces --source=local.
   --no-service            Skip writing / enabling the launchd / systemd unit.
@@ -78,6 +94,7 @@ Options:
 
 Environment overrides:
   CLAWMAST_HOME           Default for --prefix
+  CLAWMAST_CHANNEL        Default for --channel (stable | beta | alpha)
   CLAWMAST_UPDATE_URL     Channel host the worker checks (default:
                           https://clawmast.github.io/clawmast). Must
                           serve /<channel>/manifest.json and
@@ -96,6 +113,7 @@ while (( $# > 0 )); do
     --prefix)     PREFIX="$2"; shift 2 ;;
     --version)    VERSION_LABEL="$2"; shift 2 ;;
     --source)     SOURCE_MODE="$2"; shift 2 ;;
+    --channel)    CHANNEL="$2"; shift 2 ;;
     --bin-dir)    BIN_DIR="$2"; SOURCE_MODE="local"; shift 2 ;;
     --no-service) INSTALL_SERVICE="no"; shift ;;
     --symlinks)    INSTALL_SYMLINKS="yes"; shift ;;
@@ -174,8 +192,135 @@ pick_cli_bin_dir() {
 
 build_from_source() {
   command -v go >/dev/null 2>&1 || die "go toolchain not found (needed for --source=build)"
+  [[ -f "${REPO_ROOT}/go.mod" ]] \
+    || die "--source=build requires a repository checkout; ${REPO_ROOT}/go.mod not found"
   log "building from source at ${REPO_ROOT}"
   make -C "${REPO_ROOT}" build >/dev/null
+}
+
+# sha256_hex prints the lowercase hex sha256 of $1 using whichever of
+# shasum / sha256sum / openssl is available. macOS ships shasum; most
+# Linux distros ship sha256sum; openssl is the fallback for minimal
+# container images. Kept local to install.sh so releasing does not
+# assume a particular distro's coreutils layout.
+sha256_hex() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${path}" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${path}" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "${path}" | awk '{print $NF}'
+  else
+    die "no sha256 tool available (need sha256sum, shasum, or openssl)"
+  fi
+}
+
+# manifest_pick_artifact reads the manifest file at $1 and prints
+# three whitespace-separated fields for the current OS/arch: url,
+# sha256, size. Exits non-zero with no output when no artifact
+# matches. Uses python3 because it is present on every macOS > 10.15
+# and every systemd-era Linux distro; jq is intentionally not
+# required because minimal container images often omit it.
+#
+# The manifest path is passed as an argument rather than piped on
+# stdin because the inline python heredoc below already consumes
+# stdin to receive its own source code.
+manifest_pick_artifact() {
+  local path="$1" os="$2" arch="$3"
+  command -v python3 >/dev/null 2>&1 \
+    || die "python3 is required to parse manifest.json for --source=release"
+  python3 - "${path}" "${os}" "${arch}" <<'PY'
+import json, sys
+path, want_os, want_arch = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f:
+    m = json.load(f)
+for a in m.get("artifacts", []):
+    if a.get("os") == want_os and a.get("arch") == want_arch:
+        print(a["url"], a["sha256"], a["size"])
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# manifest_version reads the manifest at $1 and prints the top-level
+# "version" field. Used to label versions/<ver>/ when the user did
+# not pass --version explicitly, so the installed tree matches what
+# manifest.json advertised.
+manifest_version() {
+  local path="$1"
+  command -v python3 >/dev/null 2>&1 \
+    || die "python3 is required to parse manifest.json for --source=release"
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "${path}"
+}
+
+# fetch_release_tarball implements --source=release. It pulls the
+# channel manifest, selects the artifact for the current host, and
+# sha256-verifies the download against the manifest. Minisign
+# verification of manifest.json is an explicit non-goal here:
+# `clawmast-release verify-manifest` is the offline path the security
+# release runbook recommends, and the supervisor re-verifies every
+# auto-update using the minisign key seeded under keys/minisign.pub.
+# Forcing minisign on first install would require shipping a
+# verifier binary in the install.sh bootstrap, which is exactly the
+# "chicken and egg" problem the release channel's sha256 + HTTPS
+# origin-pinning is already defending against.
+fetch_release_tarball() {
+  command -v curl >/dev/null 2>&1 || die "--source=release requires curl"
+  command -v tar  >/dev/null 2>&1 || die "--source=release requires tar"
+
+  RELEASE_TMP="$(mktemp -d /tmp/clawmast-release.XXXXXX)"
+  local manifest_url="${UPDATE_URL%/}/${CHANNEL}/manifest.json"
+  local manifest_path="${RELEASE_TMP}/manifest.json"
+
+  log "fetching ${manifest_url}"
+  curl -fsSL --retry 3 --connect-timeout 10 -o "${manifest_path}" "${manifest_url}" \
+    || die "failed to download ${manifest_url}"
+
+  local picked
+  picked="$(manifest_pick_artifact "${manifest_path}" "${OS}" "${ARCH}")" \
+    || die "manifest ${manifest_url} has no artifact for ${OS}/${ARCH}"
+  # shellcheck disable=SC2206
+  local parts=( ${picked} )
+  local art_url="${parts[0]}" want_sha="${parts[1]}" want_size="${parts[2]}"
+
+  # Derive version label from the manifest before any extraction work,
+  # so a bad manifest fails here rather than halfway through unpacking.
+  if [[ -z "${VERSION_LABEL}" ]]; then
+    VERSION_LABEL="$(manifest_version "${manifest_path}")"
+    [[ -n "${VERSION_LABEL}" ]] || die "manifest is missing \"version\""
+  fi
+
+  local tarball="${RELEASE_TMP}/artifact.tar.gz"
+  log "downloading ${art_url}"
+  curl -fsSL --retry 3 --connect-timeout 10 -o "${tarball}" "${art_url}" \
+    || die "failed to download ${art_url}"
+
+  local got_size
+  got_size="$(wc -c < "${tarball}" | tr -d ' ')"
+  [[ "${got_size}" == "${want_size}" ]] \
+    || die "tarball size mismatch: got ${got_size}, manifest says ${want_size}"
+  local got_sha; got_sha="$(sha256_hex "${tarball}")"
+  [[ "${got_sha}" == "${want_sha}" ]] \
+    || die "tarball sha256 mismatch: got ${got_sha}, manifest says ${want_sha}"
+  log "verified sha256 ${got_sha:0:12}… (${got_size} bytes)"
+
+  local extract_root="${RELEASE_TMP}/unpack"
+  mkdir -p "${extract_root}"
+  tar -xzf "${tarball}" -C "${extract_root}"
+  local prefix_dir="${extract_root}/clawmast-${OS}-${ARCH}"
+  [[ -d "${prefix_dir}" ]] \
+    || die "extracted tarball is missing the clawmast-${OS}-${ARCH}/ prefix"
+  [[ -x "${prefix_dir}/clawmast"  ]] || die "tarball is missing the clawmast worker"
+  [[ -x "${prefix_dir}/clawmastd" ]] || die "tarball is missing the clawmastd supervisor"
+
+  BIN_DIR="${prefix_dir}"
+  case "${OS}" in
+    darwin) TEMPLATES_DIR="${prefix_dir}/launchd" ;;
+    linux)  TEMPLATES_DIR="${prefix_dir}/systemd" ;;
+  esac
+  [[ -d "${TEMPLATES_DIR}" ]] \
+    || die "tarball is missing service templates directory (${TEMPLATES_DIR})"
 }
 
 ensure_binaries() {
@@ -191,11 +336,21 @@ ensure_binaries() {
       [[ -x "${BIN_DIR}/clawmast"  ]] || die "${BIN_DIR}/clawmast not found; run 'make build' first or use --source=build"
       [[ -x "${BIN_DIR}/clawmastd" ]] || die "${BIN_DIR}/clawmastd not found; run 'make build' first or use --source=build"
       ;;
+    release)
+      fetch_release_tarball ;;
     auto)
+      # auto's decision tree is deliberately ordered to favour a quiet
+      # upgrade-in-place when the user is running this out of a repo
+      # checkout (the `make build && ./scripts/install.sh` dev loop),
+      # and to avoid requiring a Go toolchain for the curl|bash path.
       if [[ -x "${BIN_DIR}/clawmast" && -x "${BIN_DIR}/clawmastd" ]]; then
         log "using pre-built binaries in ${BIN_DIR}"
-      else
+      elif [[ -f "${REPO_ROOT}/go.mod" ]] && command -v go >/dev/null 2>&1; then
         build_from_source
+      else
+        log "no local binaries and no go toolchain; falling back to --source=release"
+        SOURCE_MODE="release"
+        fetch_release_tarball
       fi
       ;;
     *) die "unknown --source value: ${SOURCE_MODE}" ;;
@@ -254,9 +409,13 @@ ensure_layout() {
 seed_channel() {
   local ch="${PREFIX}/state/channel"
   if [[ ! -f "${ch}" ]]; then
-    printf '%s\n' "${CHANNEL_DEFAULT}" > "${ch}"
+    # Record whichever channel actually produced this install so the
+    # supervisor keeps checking the same train on subsequent
+    # auto-updates. CHANNEL_DEFAULT is the floor (stable); --channel
+    # and CLAWMAST_CHANNEL override via CHANNEL.
+    printf '%s\n' "${CHANNEL:-${CHANNEL_DEFAULT}}" > "${ch}"
     chmod 0600 "${ch}"
-    log "seeded update channel: ${CHANNEL_DEFAULT}"
+    log "seeded update channel: ${CHANNEL:-${CHANNEL_DEFAULT}}"
   fi
 }
 
@@ -327,7 +486,7 @@ write_manifest() {
   local vdir="${PREFIX}/versions/${VERSION_LABEL}"
   local manifest="${vdir}/MANIFEST.json"
   local sha
-  sha="$(shasum -a 256 "${vdir}/clawmast" | awk '{print $1}')"
+  sha="$(sha256_hex "${vdir}/clawmast")"
   cat > "${manifest}" <<EOF
 {
   "version": "${VERSION_LABEL}",
@@ -455,6 +614,18 @@ install_cli_symlinks() {
 }
 
 # Main -----------------------------------------------------------------------
+
+cleanup_release_tmp() {
+  # Only registered after fetch_release_tarball sets RELEASE_TMP, so a
+  # caller that never entered release mode does not fire an rm on an
+  # empty path. The guard is belt-and-suspenders: set -u would already
+  # trip on an unset RELEASE_TMP, but we prefer the explicit form
+  # because this trap runs with $? != 0 on error paths.
+  if [[ -n "${RELEASE_TMP}" && -d "${RELEASE_TMP}" ]]; then
+    rm -rf "${RELEASE_TMP}"
+  fi
+}
+trap cleanup_release_tmp EXIT
 
 main() {
   # Default symlink policy: track --no-service. Test/playground installs
