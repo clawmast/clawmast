@@ -414,3 +414,124 @@ func TestRunRollsBackOnBlacklistedCurrentBeforeSpawn(t *testing.T) {
 		t.Errorf("current = %q, want .../good", curTarget)
 	}
 }
+
+// TestRunRollsBackOnSpawnFailure exercises the outcomeSpawnFailure
+// path: when the binary under `current` cannot be exec'd (e.g. the
+// tarball extracted with the wrong layout and versions/<v>/clawmast is
+// not a runnable program), the supervisor must roll back to
+// `previous` instead of propagating the fork/exec error out of Run
+// and letting the OS crash-loop clawmastd. The fixture seeds a
+// non-executable stub at versions/bad/clawmast so cmd.Start() fails
+// with EACCES on every platform the supervisor targets.
+func TestRunRollsBackOnSpawnFailure(t *testing.T) {
+	root := t.TempDir()
+	sockDir := shortSocketDir(t)
+	histDir := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	// good → real test binary via symlink, same shape as the crash-
+	// loop fixture so spawn() finds an executable. bad → a regular
+	// file with mode 0o644 so cmd.Start() fails before the worker
+	// ever runs a line of code.
+	goodDir := filepath.Join(root, "versions", "good")
+	if err := os.MkdirAll(goodDir, 0o700); err != nil {
+		t.Fatalf("mkdir good: %v", err)
+	}
+	if err := os.Symlink(exe, filepath.Join(goodDir, "clawmast")); err != nil {
+		t.Fatalf("symlink good worker: %v", err)
+	}
+	badDir := filepath.Join(root, "versions", "bad")
+	if err := os.MkdirAll(badDir, 0o700); err != nil {
+		t.Fatalf("mkdir bad: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "clawmast"), []byte("not-an-elf"), 0o644); err != nil {
+		t.Fatalf("write bad worker: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "bad"), filepath.Join(root, "current")); err != nil {
+		t.Fatalf("symlink current: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "good"), filepath.Join(root, "previous")); err != nil {
+		t.Fatalf("symlink previous: %v", err)
+	}
+
+	blPath := filepath.Join(root, "state", "blacklist.json")
+	cfg := Config{
+		InstallRoot:      root,
+		WorkerBinaryName: "clawmast",
+		ExtraEnv:         []string{"CMFAKE_MODE=by_path"},
+		StartTimeout:     500 * time.Millisecond,
+		WatchdogInterval: 500 * time.Millisecond,
+		StopGrace:        200 * time.Millisecond,
+		Backoff: BackoffPolicy{
+			Base: 10 * time.Millisecond, Max: 20 * time.Millisecond,
+			SteadyReset: time.Minute, CrashWindow: time.Minute, CrashCap: 3,
+		},
+		NotifySocketPath: filepath.Join(sockDir, "n.sock"),
+		HistoryPath:      filepath.Join(histDir, "history.json"),
+		BlacklistPath:    blPath,
+		RunDir:           sockDir,
+		Stdout:           io.Discard,
+		Stderr:           io.Discard,
+	}
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	deadline := time.Now().Add(4 * time.Second)
+	var sawGood bool
+	for time.Now().Before(deadline) && !sawGood {
+		for _, e := range readHistory(t, cfg.HistoryPath) {
+			if e.Event == EventSpawn && e.Version == "good" {
+				sawGood = true
+				break
+			}
+		}
+		if !sawGood {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned: %v", err)
+	}
+	if !sawGood {
+		t.Fatal("supervisor never spawned good after spawn failure")
+	}
+
+	entries := readHistory(t, cfg.HistoryPath)
+	var rollbacks int
+	var rollbackReason string
+	var sawSpawnFailedCrash bool
+	for _, e := range entries {
+		if e.Event == EventRollback {
+			rollbacks++
+			rollbackReason = e.Reason
+		}
+		if e.Event == EventCrash && e.Version == "bad" &&
+			e.ExitCode != nil && *e.ExitCode == 71 &&
+			strings.Contains(e.Reason, "spawn-failed") {
+			sawSpawnFailedCrash = true
+		}
+	}
+	if rollbacks != 1 {
+		t.Errorf("rollback count = %d, want 1", rollbacks)
+	}
+	if rollbackReason != "spawn-failed" {
+		t.Errorf("rollback reason = %q, want %q", rollbackReason, "spawn-failed")
+	}
+	if !sawSpawnFailedCrash {
+		t.Error("no EventCrash with exit code 71 and spawn-failed reason recorded")
+	}
+
+	curTarget, _ := os.Readlink(filepath.Join(root, "current"))
+	if !strings.HasSuffix(curTarget, "good") {
+		t.Errorf("current = %q, want .../good", curTarget)
+	}
+}

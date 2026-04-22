@@ -67,6 +67,26 @@ func (s *Supervisor) loop(ctx context.Context) error {
 				return err
 			}
 			continue
+		case outcomeSpawnFailure:
+			// A fork/exec failure means the binary sitting under
+			// `current` cannot even be executed (e.g. the tarball
+			// extracted with the wrong layout and versions/<v>/clawmast
+			// does not exist, or the binary is the wrong arch). Retry
+			// will not heal that. If the gate is armed we surface the
+			// spawn failure through the install-health path so
+			// blacklist.json gets a spawn-failed entry and the next
+			// spawn reads the post-swap current. Otherwise we fall
+			// back to the crash-loop rollback target.
+			if s.gate.IsActive() {
+				if err := s.rollbackForInstallHealth(version, GateFailReasonSpawnFailed); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := s.attemptSpawnFailureRollback(version); err != nil {
+				return err
+			}
+			continue
 		case outcomeCrash:
 			// The install-gate takes precedence over the crash-cap
 			// tracker: a single crash during the observation window
@@ -149,6 +169,14 @@ const (
 	// GateStableFor of uninterrupted Running. The outer loop swaps
 	// to previous, adds a blacklist entry, and spawns again.
 	outcomeInstallHealthTimeout
+	// outcomeSpawnFailure is reported when cmd.Start() on the worker
+	// binary fails (fork/exec: no such file or directory, wrong arch,
+	// noexec mount, etc). "current is not a runnable program" is not
+	// going to heal with backoff, so the outer loop rolls back
+	// immediately instead of running the crash-cap sliding window.
+	// When the install-gate is armed the fail reason is attributed
+	// to the gate so blacklist.json records it correctly.
+	outcomeSpawnFailure
 )
 
 type spawnOutcome struct {
@@ -166,7 +194,25 @@ func (s *Supervisor) runOneSpawn(ctx context.Context, path, version string) (spa
 		slog.String("path", path))
 	sess, err := spawn(s.cfg, path, version)
 	if err != nil {
-		return spawnOutcome{}, err
+		// fork/exec failed — the worker binary is unusable. Record
+		// the event in history with exit code 71 (a sentinel distinct
+		// from the 64/65 range the worker itself uses) and return
+		// outcomeSpawnFailure so the outer loop rolls back instead of
+		// fataling the supervisor. Without this branch the error
+		// propagates out of loop() and the OS crash-loops the
+		// supervisor against a known-broken current symlink.
+		s.log.Error("spawn failed; will roll back",
+			slog.String("version", version),
+			slog.String("path", path),
+			slog.Any("err", err))
+		info := ExitInfo{Code: 71}
+		s.recordHistory(HistoryEntry{
+			Event:    EventCrash,
+			Version:  version,
+			ExitCode: IntPtr(info.Code),
+			Reason:   "spawn-failed: " + err.Error(),
+		})
+		return spawnOutcome{kind: outcomeSpawnFailure, info: info}, nil
 	}
 	s.current.Store(sess)
 	defer func() {

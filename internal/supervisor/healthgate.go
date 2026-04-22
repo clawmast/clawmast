@@ -63,8 +63,9 @@ const (
 type GateFailReason string
 
 const (
-	GateFailReasonCrash   GateFailReason = "install-health-crash"
-	GateFailReasonTimeout GateFailReason = "install-health-timeout"
+	GateFailReasonCrash       GateFailReason = "install-health-crash"
+	GateFailReasonTimeout     GateFailReason = "install-health-timeout"
+	GateFailReasonSpawnFailed GateFailReason = "install-health-spawn-failed"
 )
 
 // HealthGate is the per-install observation window. It is not safe

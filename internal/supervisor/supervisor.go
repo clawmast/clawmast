@@ -146,6 +146,17 @@ func (s *Supervisor) attemptWorkerRequestedRollback(failingVersion string) error
 	return s.rollback(failingVersion, "rollback-requested", "rollback-requested with no rollback target")
 }
 
+// attemptSpawnFailureRollback handles the outcomeSpawnFailure path
+// outside an install-gate window: the binary under `current` is not a
+// runnable program and retries won't heal that, so we roll back now
+// instead of letting the crash-cap sliding window fill. The reason
+// string "spawn-failed" is distinct from "crash-loop" in the history
+// ledger so postmortems can tell "binary was broken on disk" from
+// "binary ran but kept crashing".
+func (s *Supervisor) attemptSpawnFailureRollback(failingVersion string) error {
+	return s.rollback(failingVersion, "spawn-failed", "spawn-failed with no rollback target")
+}
+
 // checkBlacklist looks up version in state/blacklist.json. When the
 // version is listed the supervisor rolls back before spawning — this
 // is how a version the worker marked bad in a prior boot is avoided
