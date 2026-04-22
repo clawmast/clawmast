@@ -85,69 +85,102 @@ func downloadAndExtract(ctx context.Context, client *http.Client, art updater.Ar
 	return readTotal, nil
 }
 
-// extractTar walks a tar reader and materialises entries under dir.
-// Three safety rules apply:
+// workerBinaryName is the tarball entry the auto-update path cares
+// about. Everything else in the archive (clawmastd, service unit
+// templates, release metadata files) is relevant only to the
+// install.sh first-install flow and is ignored here so versions/<ver>/
+// stays worker-only — matching the flat layout install.sh produces.
+const workerBinaryName = "clawmast"
+
+// extractTar walks a tar reader and writes the worker binary out at
+// <dir>/clawmast, stripping an optional single top-level directory
+// prefix. Two archive layouts are accepted:
 //
-//  1. Paths are cleaned and must not escape dir (no "../foo").
-//  2. Only regular files, directories, and symlinks are accepted —
-//     device nodes, FIFOs, and hardlinks return ErrBadTarball.
-//  3. Symlink targets are rejected if they resolve outside dir.
+//  1. Flat (legacy, pre-Tailscale-refactor): the worker lives at
+//     tar root as "clawmast".
+//  2. Prefixed (current): the worker lives at "clawmast-<os>-<arch>/
+//     clawmast" alongside the supervisor and service templates that
+//     only install.sh needs.
 //
-// Mode bits are preserved for regular files so the worker binary lands
-// with its +x bit set; directories are forced to 0o700 to match the
-// perms install.sh uses for versions/.
+// Everything except the worker entry is silently dropped. That keeps
+// the auto-update install tree free of supervisor binaries and
+// templates that would otherwise require the versions/<ver>/
+// directory layout — which install.sh and the supervisor assume is
+// worker-only — to grow new conventions.
+//
+// Safety rules retained from the pre-refactor implementation:
+//
+//  1. Paths are cleaned and must not contain ".." or be absolute.
+//  2. Only regular files are materialised; dir / symlink / device
+//     entries are ignored (the worker never ships any of those).
+//  3. The worker entry must be found before EOF or the tarball is
+//     rejected with ErrBadTarball.
 func extractTar(tr *tar.Reader, dir string) error {
+	found := false
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			break
 		}
 		if err != nil {
 			return fmt.Errorf("%w: tar header: %v", ErrBadTarball, err)
 		}
-		rel := filepath.Clean(hdr.Name)
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		rel := filepath.ToSlash(filepath.Clean(hdr.Name))
 		if rel == "." || rel == "" {
 			continue
 		}
-		if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		if strings.HasPrefix(rel, "../") || rel == ".." || strings.Contains(rel, "/../") || filepath.IsAbs(rel) {
 			return fmt.Errorf("%w: unsafe path %q", ErrBadTarball, hdr.Name)
 		}
-		out := filepath.Join(dir, rel)
-		// Defence in depth: the final path must still be inside dir
-		// even after symlink traversal in an earlier entry.
-		if rel, err := filepath.Rel(dir, out); err != nil || strings.HasPrefix(rel, "..") {
-			return fmt.Errorf("%w: escaped root %q", ErrBadTarball, hdr.Name)
+		// Only the worker binary is forwarded. Split the cleaned path
+		// and accept depth 0 ("clawmast") or depth 1
+		// ("<prefix>/clawmast"); anything deeper is layout drift we
+		// refuse to silently honour.
+		parts := strings.Split(rel, "/")
+		last := parts[len(parts)-1]
+		if last != workerBinaryName {
+			continue
+		}
+		if len(parts) > 2 {
+			continue
 		}
 
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(out, 0o700); err != nil {
-				return fmt.Errorf("selfupdate: mkdir %s: %w", out, err)
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
-				return fmt.Errorf("selfupdate: mkdir parent: %w", err)
-			}
-			f, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
-			if err != nil {
-				return fmt.Errorf("selfupdate: open %s: %w", out, err)
-			}
-			if _, err := io.Copy(f, tr); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("selfupdate: write %s: %w", out, err)
-			}
-			if err := f.Close(); err != nil {
-				return fmt.Errorf("selfupdate: close %s: %w", out, err)
-			}
-		case tar.TypeSymlink:
-			if filepath.IsAbs(hdr.Linkname) {
-				return fmt.Errorf("%w: absolute symlink %q -> %q", ErrBadTarball, hdr.Name, hdr.Linkname)
-			}
-			if err := os.Symlink(hdr.Linkname, out); err != nil {
-				return fmt.Errorf("selfupdate: symlink %s: %w", out, err)
-			}
-		default:
-			return fmt.Errorf("%w: unsupported entry type %c in %q", ErrBadTarball, hdr.Typeflag, hdr.Name)
+		if found {
+			return fmt.Errorf("%w: duplicate worker entry %q", ErrBadTarball, hdr.Name)
 		}
+		out := filepath.Join(dir, workerBinaryName)
+		// Defence in depth: the final path must still be inside dir
+		// after cleaning. extractTar never creates intermediate dirs
+		// anymore (we only write a single file at dir root) so
+		// symlink-race style attacks have no foothold here.
+		if relOut, relErr := filepath.Rel(dir, out); relErr != nil || strings.HasPrefix(relOut, "..") {
+			return fmt.Errorf("%w: escaped root %q", ErrBadTarball, hdr.Name)
+		}
+		mode := os.FileMode(hdr.Mode) & 0o777
+		if mode == 0 {
+			// Some archivers omit mode bits; fall back to 0o755 so the
+			// executable bit survives on readers that trust the header
+			// mode verbatim.
+			mode = 0o755
+		}
+		f, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+		if err != nil {
+			return fmt.Errorf("selfupdate: open %s: %w", out, err)
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("selfupdate: write %s: %w", out, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("selfupdate: close %s: %w", out, err)
+		}
+		found = true
 	}
+	if !found {
+		return fmt.Errorf("%w: no %q entry in archive", ErrBadTarball, workerBinaryName)
+	}
+	return nil
 }

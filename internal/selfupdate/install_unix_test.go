@@ -237,3 +237,97 @@ func TestErrorsExported(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyExtractsPrefixedTarball covers the Tailscale-style layout
+// introduced alongside the install.sh --source=release refactor: the
+// archive nests the worker under a clawmast-<os>-<arch>/ prefix and
+// ships the supervisor + service unit template alongside. Auto-update
+// must strip the prefix, extract only the worker, and silently drop
+// the rest so versions/<ver>/ stays worker-only the way install.sh
+// expects.
+func TestApplyExtractsPrefixedTarball(t *testing.T) {
+	workerBody := []byte("prefixed worker binary\n")
+	body := buildTarball(t, map[string][]byte{
+		"clawmast-linux-amd64/":                            nil,
+		"clawmast-linux-amd64/clawmast":                    workerBody,
+		"clawmast-linux-amd64/clawmastd":                   []byte("supervisor bytes"),
+		"clawmast-linux-amd64/systemd/clawmastd.service":   []byte("[Service]"),
+		"clawmast-darwin-arm64/launchd/com.clawmast.plist": []byte("<plist/>"),
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	root := t.TempDir()
+	_, err := selfupdate.Apply(context.Background(), selfupdate.Config{
+		Manifest:    makeManifest(srv.URL+"/artifact.tar.gz", body),
+		InstallRoot: root,
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	workerPath := filepath.Join(root, "versions", "v9.9.9", "clawmast")
+	got, err := os.ReadFile(workerPath)
+	if err != nil {
+		t.Fatalf("read worker: %v", err)
+	}
+	if !bytes.Equal(got, workerBody) {
+		t.Errorf("worker content mismatch: got %q want %q", got, workerBody)
+	}
+	// Supervisor + templates must NOT have been written.
+	for _, stray := range []string{
+		"clawmastd",
+		"clawmast-linux-amd64/clawmastd",
+		"systemd/clawmastd.service",
+		"launchd/com.clawmast.plist",
+	} {
+		if _, err := os.Stat(filepath.Join(root, "versions", "v9.9.9", stray)); !os.IsNotExist(err) {
+			t.Errorf("unexpected file leaked through extractor: %s (err=%v)", stray, err)
+		}
+	}
+}
+
+// TestApplyRejectsTarballWithoutWorker guards the explicit sentinel
+// when a payload ships metadata but no worker binary — e.g. a future
+// supervisor-only package accidentally pointed at by manifest.json.
+func TestApplyRejectsTarballWithoutWorker(t *testing.T) {
+	body := buildTarball(t, map[string][]byte{
+		"clawmast-linux-amd64/clawmastd":                 []byte("supervisor"),
+		"clawmast-linux-amd64/systemd/clawmastd.service": []byte("[Service]"),
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := selfupdate.Apply(context.Background(), selfupdate.Config{
+		Manifest:    makeManifest(srv.URL+"/artifact.tar.gz", body),
+		InstallRoot: t.TempDir(),
+	})
+	if !errors.Is(err, selfupdate.ErrBadTarball) {
+		t.Fatalf("want ErrBadTarball, got %v", err)
+	}
+}
+
+// TestApplyRejectsUnsafePath keeps the path-traversal defence
+// surfaced through the refactor: an entry named "../clawmast" must
+// never escape the staging directory, even though its basename
+// matches the binary we are looking for.
+func TestApplyRejectsUnsafePath(t *testing.T) {
+	body := buildTarball(t, map[string][]byte{
+		"../clawmast": []byte("evil"),
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := selfupdate.Apply(context.Background(), selfupdate.Config{
+		Manifest:    makeManifest(srv.URL+"/artifact.tar.gz", body),
+		InstallRoot: t.TempDir(),
+	})
+	if !errors.Is(err, selfupdate.ErrBadTarball) {
+		t.Fatalf("want ErrBadTarball, got %v", err)
+	}
+}
