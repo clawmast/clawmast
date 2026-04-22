@@ -25,6 +25,7 @@
 /tmp/
 /logs/
 /.clawmast-dev/
+/.agent-scratch/
 
 # Task Master (local workspace state)
 /.taskmaster/
